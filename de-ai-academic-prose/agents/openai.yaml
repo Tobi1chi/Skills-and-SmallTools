@@ -1,0 +1,4 @@
+interface:
+  display_name: "De-AI Academic Prose"
+  short_description: "Reduce AI tone in academic prose"
+  default_prompt: "Rewrite academic text to reduce obvious AI-generated style while preserving meaning, citations, and technical accuracy."
