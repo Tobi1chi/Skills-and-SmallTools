@@ -1,0 +1,4 @@
+interface:
+  display_name: "Profile Writing Style"
+  short_description: "Extract a reusable writing style profile from samples"
+  default_prompt: "Analyze these writing samples and produce a Markdown profile of the author's recurring style, grounded in repeated patterns rather than one-off quirks."

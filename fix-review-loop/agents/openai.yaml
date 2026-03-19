@@ -1,0 +1,4 @@
+interface:
+  display_name: "Fix Review Loop"
+  short_description: "Iterate on bug fixes until the loop is clean"
+  default_prompt: "Fix the reported code problem in a loop: diagnose, patch, verify, and review again after each change. Continue until no actionable issue remains or a real technical route choice requires user input."
