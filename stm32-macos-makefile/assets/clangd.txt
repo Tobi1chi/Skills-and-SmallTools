@@ -1,0 +1,17 @@
+CompileFlags:
+  Add:
+    - --target=arm-none-eabi
+    - -mcpu=cortex-m3          # Adjust for the actual MCU
+    - -mthumb
+
+    # CMSIS / HAL / USB include paths
+    - -IInc
+    - -IDrivers/CMSIS/Core/Include
+    - -IDrivers/CMSIS/Device/ST/STM32xxxx/Include
+    - -IDrivers/STM32xxxx_HAL_Driver/Inc
+    - -IMiddlewares/ST/STM32_USB_Device_Library/Core/Inc
+    - -IMiddlewares/ST/STM32_USB_Device_Library/Class/CDC/Inc
+
+    # newlib headers
+    - -isystem
+    - /Applications/ArmGNUToolchain/12.3.rel1/arm-none-eabi/arm-none-eabi/include

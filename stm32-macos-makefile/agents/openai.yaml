@@ -1,0 +1,4 @@
+interface:
+  display_name: "STM32 macOS Makefile"
+  short_description: "Set up macOS STM32 Makefile workflows"
+  default_prompt: "Use $stm32-macos-makefile to configure or repair a macOS STM32 Makefile-based project with clangd, OpenOCD, and helper scripts."

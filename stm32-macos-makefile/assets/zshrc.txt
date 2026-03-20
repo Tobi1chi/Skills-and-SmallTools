@@ -1,0 +1,48 @@
+stm32flash() {
+  if ! command -v openocd &>/dev/null; then
+    echo "Error: openocd not found. Install via: brew install openocd"
+    return 1
+  fi
+
+  local dir="${1:-.}"
+  local elf="$2"
+  local abs_dir
+
+  if ! abs_dir="$(cd "$dir" 2>/dev/null && pwd)"; then
+    echo "Error: Directory '$dir' not found"
+    return 1
+  fi
+
+  local project_name
+  project_name="$(basename "$abs_dir")"
+
+  if [[ -z "$elf" ]]; then
+    elf="build/${project_name}.elf"
+    echo "Auto-detected ELF: $elf"
+  fi
+
+  if [[ ! -f "$abs_dir/$elf" ]]; then
+    echo "Error: ELF not found: $abs_dir/$elf"
+    echo "Tried to auto-detect from directory name '$project_name'"
+    echo "Override with: stm32flash [dir] <custom.elf>"
+    return 1
+  fi
+
+  echo "Flashing $project_name -> $elf"
+  echo "Using ST-Link on STM32F1x"
+
+  (
+    cd "$abs_dir" && openocd \
+      -f interface/stlink.cfg \
+      -f target/stm32f1x.cfg \
+      -c "program $elf verify reset exit" 2>&1
+  ) | grep -E "(wrote|verified|Error|Warn|Info : flash|shutdown|target halted)"
+}
+
+stm32run() {
+  make
+  stm32flash
+}
+
+export STM32CubeMX_PATH=/Applications/STMicroelectronics/STM32CubeMX.app/Contents/Resources
+export PATH="/Applications/ArmGNUToolchain/12.3.rel1/arm-none-eabi/bin:$PATH"
