@@ -1,0 +1,4 @@
+interface:
+  display_name: "HA Docker YAML Sync"
+  short_description: "Sync HA YAML files with a running container"
+  default_prompt: "Use $ha-docker-yaml-sync to update Home Assistant YAML files inside a running Docker container."
