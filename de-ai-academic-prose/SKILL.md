@@ -58,13 +58,24 @@ Keep this preference intake short. In Default mode, ask concise plain-text
 questions only when the parameters are not already clear and guessing would
 materially change the outcome.
 
+Do not move on to rewriting when the user's intended meaning is still
+ambiguous in a way that would materially affect style. If "remove AI tone"
+could plausibly mean either light cleanup or aggressive de-templating, ask
+first and wait for the answer instead of silently picking one.
+
+These are blocking parameters for direct edits when unclear:
+
+- how much signposting or connective language the user wants to keep;
+- whether the user prefers authored smoothness or more compressed prose;
+- whether the user wants diagnosis first or immediate rewriting.
+
 Default assumptions when the user does not specify:
 
 - rewrite pressure: `medium`
 - variance: `off`
-- signposted-English tolerance: `lenient`
-- soft discourse marker cap: `1` per paragraph
-- mode: `diagnose + rewrite`
+- signposted-English tolerance: `preserve comfortable signposting`
+- soft discourse marker cap: `2` per paragraph
+- mode: `diagnose-only` until rewrite preferences are clear
 
 ### 0. Start with data analysis
 
@@ -104,7 +115,7 @@ This includes words and phrases such as `however`, `moreover`, `overall`,
 `nevertheless`, `nonetheless`, `in addition`, and `on the other hand`.
 Do not flag them just because they appear once. Instead, use the script's
 paragraph-level cap and only treat them as a style problem when a paragraph
-exceeds the configured limit. The default cap is one soft discourse marker
+exceeds the configured limit. The default cap is two soft discourse markers
 per paragraph, unless the user prefers an even more signposted style.
 
 For short excerpts, still do a lightweight analysis mentally before assigning
@@ -224,7 +235,7 @@ Prefer:
 - specific system conditions, variables, constraints, and results over abstract
   umbrella nouns;
 - varied sentence lengths and paragraph cadence;
-- fewer transition words when logic is already clear.
+- enough transition words to keep the prose comfortable to read.
 
 Useful rewrite moves:
 
@@ -234,6 +245,11 @@ Useful rewrite moves:
 - Delete throat-clearing phrases such as `it is important to note that`.
 - Delete paragraph-ending recap sentences that add no new information.
 - Merge or split sentences to avoid a flat rhythm.
+- Keep helpful connective language when it genuinely guides the reader.
+- Remove only redundant, stacked, or overly formulaic transitions.
+
+Do not optimize for the fewest possible connectives. The goal is natural,
+authored readability, not stripped-down minimalism.
 
 Match the intensity of the rewrite to the severity:
 

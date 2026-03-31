@@ -244,7 +244,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--soft-discourse-cap-per-paragraph",
         type=int,
-        default=1,
+        default=2,
         help=(
             "Allow this many soft discourse markers per paragraph before "
             "flagging overuse"
