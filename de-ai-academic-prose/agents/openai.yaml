@@ -1,4 +1,4 @@
 interface:
   display_name: "De-AI Academic Prose"
-  short_description: "Reduce AI tone in academic prose"
-  default_prompt: "Rewrite academic text to reduce obvious AI-generated style while preserving meaning, citations, and technical accuracy."
+  short_description: "Diagnose or reduce AI tone in academic prose"
+  default_prompt: "First confirm the user's screening preferences for de-AI work, including rewrite pressure, tolerance for signposted academic English, soft discourse marker limits, variance, and scope. Then analyze academic Markdown/LaTeX prose, diagnose the AI-style signals with those parameters, and optionally rewrite it while preserving meaning, citations, and technical accuracy."
