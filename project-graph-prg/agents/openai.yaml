@@ -1,0 +1,4 @@
+interface:
+  display_name: "Project Graph PRG"
+  short_description: "Generate and validate Project Graph PRG files"
+  default_prompt: "Use $project-graph-prg to generate or modify a Project Graph .prg file from requirements."

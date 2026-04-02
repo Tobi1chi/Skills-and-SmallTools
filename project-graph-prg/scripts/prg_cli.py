@@ -1,0 +1,263 @@
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+
+from prg_tools import (
+    auto_fix_layout,
+    auto_fix_operation_block_links,
+    edit_document,
+    find_overlaps,
+    find_spacing_violations,
+    generate_prg_from_spec,
+    inspect_document,
+    read_prg,
+    validate_document,
+    validate_operation_block_links,
+    write_prg,
+)
+
+
+def add_common_indent_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--indent", type=int, default=2, help="JSON indentation")
+
+
+def print_json(payload: object, indent: int) -> None:
+    print(json.dumps(payload, ensure_ascii=False, indent=indent))
+
+
+def cmd_inspect(args: argparse.Namespace) -> int:
+    summary = inspect_document(read_prg(args.project), sample_limit=args.limit)
+    print_json(summary, args.indent)
+    return 0
+
+
+def cmd_generate(args: argparse.Namespace) -> int:
+    spec = json.loads(args.spec.read_text(encoding="utf-8"))
+    stage, attachments, metadata, tags, references = generate_prg_from_spec(spec)
+    write_prg(
+        args.output,
+        stage=stage,
+        attachments=attachments,
+        metadata=metadata,
+        tags=tags,
+        references=references,
+    )
+    print_json(
+        {
+            "output": str(args.output.resolve()),
+            "object_count": len(stage),
+            "attachment_count": len(attachments),
+        },
+        args.indent,
+    )
+    return 0
+
+
+def cmd_validate(args: argparse.Namespace) -> int:
+    expected = json.loads(args.expect.read_text(encoding="utf-8")) if args.expect else None
+    result = validate_document(read_prg(args.project), expected=expected)
+    print_json(result, args.indent)
+    return 0 if result["ok"] else 1
+
+
+def cmd_overlap(args: argparse.Namespace) -> int:
+    document = read_prg(args.project)
+    overlap_result = find_overlaps(
+        document,
+        include_sections=not args.exclude_sections,
+        include_points=args.include_points,
+        min_overlap_area=args.min_area,
+        ignore_containment=args.ignore_containment,
+    )
+    spacing_result = None
+    if args.min_gap > 0:
+        spacing_result = find_spacing_violations(
+            document,
+            include_sections=not args.exclude_sections,
+            include_points=args.include_points,
+            min_gap=args.min_gap,
+            ignore_containment=args.ignore_containment,
+        )
+    result = {
+        "ok": overlap_result["ok"] and (spacing_result["ok"] if spacing_result else True),
+        "overlap": overlap_result,
+        "spacing": spacing_result,
+    }
+    print_json(result, args.indent)
+    return 0 if result["ok"] else 1
+
+
+def cmd_validate_op(args: argparse.Namespace) -> int:
+    result = validate_operation_block_links(read_prg(args.project))
+    print_json(result, args.indent)
+    return 0 if result["ok"] else 1
+
+
+def cmd_fix_layout(args: argparse.Namespace) -> int:
+    document = read_prg(args.input)
+    result = auto_fix_layout(
+        document,
+        include_sections=args.include_sections,
+        include_points=args.include_points,
+        min_overlap_area=args.min_area,
+        padding=args.padding,
+        max_iterations=args.max_iterations,
+    )
+    output_path = (args.output or args.input).resolve()
+    write_prg(
+        output_path,
+        stage=document.stage,
+        metadata=document.metadata,
+        tags=document.tags,
+        references=document.references,
+        attachments=document.attachments,
+    )
+    print_json(
+        {
+            "input": str(args.input.resolve()),
+            "output": str(output_path),
+            **result,
+        },
+        args.indent,
+    )
+    return 0 if result["ok"] else 1
+
+
+def cmd_fix_op_links(args: argparse.Namespace) -> int:
+    document = read_prg(args.input)
+    result = auto_fix_operation_block_links(
+        document,
+        intermediate_label=args.label,
+        intermediate_width=args.width,
+        intermediate_height=args.height,
+        vertical_offset=args.vertical_offset,
+    )
+    output_path = (args.output or args.input).resolve()
+    write_prg(
+        output_path,
+        stage=document.stage,
+        metadata=document.metadata,
+        tags=document.tags,
+        references=document.references,
+        attachments=document.attachments,
+    )
+    print_json(
+        {
+            "input": str(args.input.resolve()),
+            "output": str(output_path),
+            **result,
+        },
+        args.indent,
+    )
+    return 0 if result["ok"] else 1
+
+
+def cmd_edit(args: argparse.Namespace) -> int:
+    document = read_prg(args.input)
+    patch = json.loads(args.patch.read_text(encoding="utf-8"))
+    result = edit_document(document, patch)
+    output_path = (args.output or args.input).resolve()
+    write_prg(
+        output_path,
+        stage=document.stage,
+        metadata=document.metadata,
+        tags=document.tags,
+        references=document.references,
+        attachments=document.attachments,
+    )
+    print_json(
+        {
+            "input": str(args.input.resolve()),
+            "patch": str(args.patch.resolve()),
+            "output": str(output_path),
+            **result,
+        },
+        args.indent,
+    )
+    return 0 if result["ok"] else 1
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Unified CLI for Project Graph .prg generation, inspection, editing, validation, and repair.")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    inspect_parser = subparsers.add_parser("inspect", help="Inspect a .prg file")
+    inspect_parser.add_argument("project", type=Path, help="Path to the .prg file")
+    inspect_parser.add_argument("--limit", type=int, default=20, help="Max sampled nodes/edges/sections in output")
+    add_common_indent_argument(inspect_parser)
+    inspect_parser.set_defaults(func=cmd_inspect)
+
+    generate_parser = subparsers.add_parser("generate", help="Generate a .prg file from a JSON spec")
+    generate_parser.add_argument("spec", type=Path, help="Path to the intermediate JSON spec")
+    generate_parser.add_argument("output", type=Path, help="Path to the output .prg file")
+    add_common_indent_argument(generate_parser)
+    generate_parser.set_defaults(func=cmd_generate)
+
+    edit_parser = subparsers.add_parser("edit", help="Edit an existing .prg file using a JSON patch")
+    edit_parser.add_argument("input", type=Path, help="Path to the input .prg file")
+    edit_parser.add_argument("patch", type=Path, help="Path to the JSON edit patch")
+    edit_parser.add_argument("output", type=Path, nargs="?", help="Path to the output .prg file; defaults to input path")
+    add_common_indent_argument(edit_parser)
+    edit_parser.set_defaults(func=cmd_edit)
+
+    validate_parser = subparsers.add_parser("validate", help="Validate a .prg file")
+    validate_parser.add_argument("project", type=Path, help="Path to the .prg file")
+    validate_parser.add_argument("--expect", type=Path, help="Optional expected-content JSON")
+    add_common_indent_argument(validate_parser)
+    validate_parser.set_defaults(func=cmd_validate)
+
+    overlap_parser = subparsers.add_parser("overlap", help="Check overlap and spacing rules for a .prg file")
+    overlap_parser.add_argument("project", type=Path, help="Path to the .prg file")
+    overlap_parser.add_argument("--include-points", action="store_true", help="Include ConnectPoint objects in checks")
+    overlap_parser.add_argument("--exclude-sections", action="store_true", help="Exclude Section bounds from checks")
+    overlap_parser.add_argument("--min-area", type=float, default=1.0, help="Minimum overlap area to report")
+    overlap_parser.add_argument("--min-gap", type=float, default=200.0, help="Minimum required edge-to-edge spacing between blocks")
+    overlap_parser.add_argument("--ignore-containment", action="store_true", help="Ignore full containment and only report partial overlaps")
+    add_common_indent_argument(overlap_parser)
+    overlap_parser.set_defaults(func=cmd_overlap)
+
+    validate_op_parser = subparsers.add_parser(
+        "validate-op",
+        help="Validate that operation blocks only connect through exactly one blank intermediate register node",
+    )
+    validate_op_parser.add_argument("project", type=Path, help="Path to the .prg file")
+    add_common_indent_argument(validate_op_parser)
+    validate_op_parser.set_defaults(func=cmd_validate_op)
+
+    fix_layout_parser = subparsers.add_parser("fix-layout", help="Auto-fix overlapping layout blocks in a .prg file")
+    fix_layout_parser.add_argument("input", type=Path, help="Path to the input .prg file")
+    fix_layout_parser.add_argument("output", type=Path, nargs="?", help="Path to the output .prg file; defaults to input path")
+    fix_layout_parser.add_argument("--include-points", action="store_true", help="Include ConnectPoint objects in overlap checks")
+    fix_layout_parser.add_argument("--include-sections", action="store_true", help="Include Section bounds in overlap checks")
+    fix_layout_parser.add_argument("--min-area", type=float, default=1.0, help="Minimum overlap area to resolve")
+    fix_layout_parser.add_argument("--padding", type=float, default=24.0, help="Extra spacing added when separating objects")
+    fix_layout_parser.add_argument("--max-iterations", type=int, default=50, help="Maximum fix iterations")
+    add_common_indent_argument(fix_layout_parser)
+    fix_layout_parser.set_defaults(func=cmd_fix_layout)
+
+    fix_op_parser = subparsers.add_parser(
+        "fix-op-links",
+        help="Auto-fix illegal operation-block links by inserting one blank intermediate register node",
+    )
+    fix_op_parser.add_argument("input", type=Path, help="Path to the input .prg file")
+    fix_op_parser.add_argument("output", type=Path, nargs="?", help="Path to the output .prg file; defaults to input path")
+    fix_op_parser.add_argument("--label", default="", help="Text used for inserted intermediate register nodes; keep blank by default")
+    fix_op_parser.add_argument("--width", type=float, default=100.0, help="Width of inserted intermediate register nodes")
+    fix_op_parser.add_argument("--height", type=float, default=76.0, help="Height of inserted intermediate blocks")
+    fix_op_parser.add_argument("--vertical-offset", type=float, default=140.0, help="Vertical offset for inserted intermediate blocks")
+    add_common_indent_argument(fix_op_parser)
+    fix_op_parser.set_defaults(func=cmd_fix_op_links)
+
+    return parser
+
+
+def main() -> int:
+    parser = build_parser()
+    args = parser.parse_args()
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
