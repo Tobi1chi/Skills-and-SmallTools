@@ -14,6 +14,7 @@ Current CLI surface:
 - `prg_cli.py overlap`
 - `prg_cli.py fix-op-links`
 - `prg_cli.py fix-layout`
+- `prg_cli.py route-edge-crossings`
 
 ## Generate From Requirements
 
@@ -32,13 +33,17 @@ Workflow:
 4. If the graph contains logic operators like #ADD# or #DIV#, run `prg_cli.py validate-op`.
 5. Read the structural and logic validation results.
 6. If needed, run `prg_cli.py fix-op-links` and re-run logic validation.
-7. Run `prg_cli.py overlap` last.
+7. Run `prg_cli.py overlap` last for geometry validation.
 8. If needed, run `prg_cli.py fix-layout` and re-run overlap validation.
+9. After overlap passes, run `prg_cli.py route-edge-crossings`.
 
 Constraints:
 - Keep all labels Unicode-safe.
 - Do not leave any overlapping blocks, including containment overlap.
 - Default to `200px` edge-to-edge clearance. If the user requires a different clearance such as `300px around each unit`, run `prg_cli.py overlap --min-gap 300`.
+- Treat generated text-node size as derived from text content. Do not trust placeholder width and height from the initial draft spec.
+- Treat Section bounds as real geometry during the final overlap pass unless the user explicitly asks to exclude them.
+- After overlap passes, check whether any straight edge fully passes through a block and, if so, route it with `prg_cli.py route-edge-crossings`.
 - The model must decide whether repair is safe before calling `prg_cli.py fix-op-links` or `prg_cli.py fix-layout`.
 - Return the generated `.prg` path and the validation command sequence.
 ```
@@ -60,8 +65,9 @@ Workflow:
 4. If the graph contains logic operators like #ADD# or #DIV#, run `prg_cli.py validate-op`.
 5. Read the structural and logic validation results.
 6. If needed, run `prg_cli.py fix-op-links` and re-run logic validation.
-7. Run `prg_cli.py overlap` last.
+7. Run `prg_cli.py overlap` last for geometry validation.
 8. If needed, run `prg_cli.py fix-layout` and re-run overlap validation.
+9. After overlap passes, run `prg_cli.py route-edge-crossings`.
 
 State clearly that the result is a logical reconstruction, not a pixel-perfect import.
 The model must decide whether repair is safe before calling `prg_cli.py fix-op-links` or `prg_cli.py fix-layout`.
@@ -84,8 +90,9 @@ Workflow:
 5. If the graph contains logic operators like #ADD# or #DIV#, run `prg_cli.py validate-op`.
 6. Read the structural and logic validation results.
 7. If needed, run `prg_cli.py fix-op-links` and re-run logic validation.
-8. Run `prg_cli.py overlap` last.
+8. Run `prg_cli.py overlap` last for geometry validation.
 9. If needed, run `prg_cli.py fix-layout` and re-run overlap validation.
+10. After overlap passes, run `prg_cli.py route-edge-crossings`.
 
 Decision rule:
 - Do not call repair commands automatically just because validation failed.
@@ -111,8 +118,9 @@ Workflow:
 5. If the graph contains logic operators like #ADD# or #DIV#, run `prg_cli.py validate-op`.
 6. Read the structural and logic validation results.
 7. Only if needed and safe, run `prg_cli.py fix-op-links` and re-run logic validation.
-8. Run `prg_cli.py overlap` last.
+8. Run `prg_cli.py overlap` last for geometry validation.
 9. Only if needed and safe, run `prg_cli.py fix-layout` and re-run overlap validation.
+10. After overlap passes, run `prg_cli.py route-edge-crossings`.
 
 Constraints:
 - Prefer local semantic edits over full regeneration when the user wants to preserve the existing graph.
@@ -130,6 +138,8 @@ Return:
 - edge summary
 - whether validation passes
 - whether any overlap exists
+- whether any Section-bound overlap or spacing violation exists
+- whether any straight `LineEdge` fully passes through a block
 - whether any illegal direct operator-to-operator links exist
 ```
 
@@ -144,8 +154,9 @@ Follow this workflow exactly:
 3. For edits, prefer a UTF-8 edit patch and `prg_cli.py edit` before considering regeneration.
 4. Run structural validation before logic validation.
 5. Run logic validation before overlap validation.
-6. Keep overlap checking at the end.
-7. Never auto-repair blindly. Read validation output first and decide whether repair is safe.
-8. If repair would risk changing semantics, adjust the patch/spec and retry instead.
-9. Return the final command sequence you ran, the validation status, and the output `.prg` path.
+6. Keep overlap checking near the end, after structure and logic are stable.
+7. After overlap passes, check and route any edge-through-block crossings.
+8. Never auto-repair blindly. Read validation output first and decide whether repair is safe.
+9. If repair would risk changing semantics, adjust the patch/spec and retry instead.
+10. Return the final command sequence you ran, the validation status, and the output `.prg` path.
 ```

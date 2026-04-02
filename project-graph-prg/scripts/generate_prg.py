@@ -4,7 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
-from prg_tools import generate_prg_from_spec, write_prg
+from geometry_prg_tools import generate_prg_from_spec, write_prg
 
 
 def main() -> int:

@@ -1,6 +1,6 @@
 ---
 name: project-graph-prg
-description: Generate, inspect, validate, and overlap-check Project Graph `.prg` files from natural-language requirements or reference diagrams. Use when Codex needs to create a new `.prg`, modify an existing `.prg`, inspect a `.prg` archive, validate required nodes/edges/sections, or enforce a no-overlap layout for Project Graph diagrams.
+description: Generate, inspect, validate, edit, and geometry-check Project Graph `.prg` files from natural-language requirements or reference diagrams. Use when Codex needs to create a new `.prg`, modify an existing `.prg`, inspect a `.prg` archive, validate required nodes/edges/sections, enforce no-overlap layout rules, or route edges around blocks.
 ---
 
 # Project Graph PRG
@@ -32,7 +32,9 @@ Use Unicode text in generated content. Write JSON, Markdown, and script I/O as U
 7. Repair logic before layout.
    - Run `auto_fix_operation_links.py` only for illegal operator-link problems.
    - Run `auto_fix_layout.py` only after logic is settled, because earlier repairs may change layout.
-8. If validation still fails after repair, adjust the JSON spec or edit patch and retry instead of hand-editing the binary archive.
+8. If the final overlap/spacing check passes, run edge routing last.
+   - Use `route_edge_crossings.py` or `prg_cli.py route-edge-crossings` to split a `LineEdge` into `A -> ConnectPoint -> B` when the edge fully passes through a block.
+9. If validation still fails after repair, adjust the JSON spec or edit patch and retry instead of hand-editing the binary archive.
 
 ## Model Workflow Template
 
@@ -44,10 +46,11 @@ When using this skill, prefer to make the model follow this explicit workflow in
 4. If the graph contains operator blocks such as `#ADD#`, `#DIV#`, or `#SIN#`, run `prg_cli.py validate-op`.
 5. Read the validation output and decide whether logic repair is appropriate.
 6. If needed, run `prg_cli.py fix-op-links`, then re-run `prg_cli.py validate-op`.
-7. Run `prg_cli.py overlap` last.
+7. Run `prg_cli.py overlap` last for geometry validation.
 8. Read the overlap/spacing output and decide whether layout repair is appropriate.
 9. If needed, run `prg_cli.py fix-layout`, then re-run `prg_cli.py overlap`.
-10. Report what passed, what failed, and whether the final `.prg` is acceptable.
+10. After overlap passes, run `prg_cli.py route-edge-crossings`.
+11. Report what passed, what failed, and whether the final `.prg` is acceptable.
 
 Do not auto-repair blindly. The model should inspect validation results first, then decide whether repair is safe.
 
@@ -55,15 +58,17 @@ Do not auto-repair blindly. The model should inspect validation results first, t
 
 The skill bundles these scripts in [scripts](scripts):
 
-- [prg_cli.py](scripts/prg_cli.py): unified CLI entry point for inspect/generate/validate/overlap/fix flows
+- [prg_cli.py](scripts/prg_cli.py): unified CLI entry point for inspect/generate/edit/validate/overlap/fix/route flows
 - [edit_prg.py](scripts/edit_prg.py): apply a semantic JSON patch to an existing `.prg`
 - [generate_prg.py](scripts/generate_prg.py): create a `.prg` from a JSON spec
 - [inspect_prg.py](scripts/inspect_prg.py): summarize archive contents, nodes, edges, sections, and drawings
 - [validate_prg.py](scripts/validate_prg.py): verify archive structure and optional expected texts/sections/edges
-- [check_overlap.py](scripts/check_overlap.py): detect overlapping rectangular blocks
+- [check_overlap.py](scripts/check_overlap.py): detect overlapping rectangular blocks and minimum-gap violations using recomputed text bounds and resolved Section bounds
 - [auto_fix_layout.py](scripts/auto_fix_layout.py): shift overlapping blocks until no overlap remains or iteration limit is reached
 - [validate_operation_links.py](scripts/validate_operation_links.py): enforce that operator blocks only reach other operator blocks through exactly one blank intermediate register node
 - [auto_fix_operation_links.py](scripts/auto_fix_operation_links.py): repair direct operator-to-operator links by inserting one blank intermediate register node
+- [route_edge_crossings.py](scripts/route_edge_crossings.py): insert `ConnectPoint` detours when straight `LineEdge` segments pass through a block
+- [geometry_prg_tools.py](scripts/geometry_prg_tools.py): geometry-aware helpers for recomputed `TextNode` sizes, resolved `Section` bounds, overlap checks, and edge routing
 - [prg_tools.py](scripts/prg_tools.py): shared `.prg` ZIP/msgpack helpers
 
 Validation scripts and repair scripts are intentionally separate. Use the validation output to decide whether a repair script should run. Do not assume repair is always correct. Keep overlap detection and layout repair at the end of the workflow to avoid wasted layout work caused by earlier logic repairs.
@@ -120,6 +125,12 @@ Auto-fix layout at the end of the workflow:
 uv run --with msgpack --python 3.12 .\scripts\prg_cli.py fix-layout out.prg fixed.prg
 ```
 
+Route edge crossings after overlap passes:
+
+```powershell
+uv run --with msgpack --python 3.12 .\scripts\prg_cli.py route-edge-crossings fixed.prg routed.prg
+```
+
 Validate logic operator links:
 
 ```powershell
@@ -138,9 +149,11 @@ Do not ignore containment overlap. If one block fully contains another block, th
 
 - Build the `.prg` through the JSON spec, not by mutating msgpack manually.
 - Use Unicode for node labels, section titles, and inserted helper text. Store JSON/reference files in UTF-8.
-- Keep text blocks separated enough that `check_overlap.py` returns no overlaps.
+- Generated files should rely on recomputed text-node bounds, not placeholder width/height guesses.
+- Keep text blocks separated enough that `check_overlap.py` returns no overlaps or spacing violations.
 - Leave overlap detection and layout repair until the end of the workflow, after logic and structural checks.
 - If overlap exists at the final layout stage, prefer `auto_fix_layout.py` before manually repositioning objects.
+- After layout passes, check whether any straight edge fully passes through a block and route it with `route_edge_crossings.py`.
 - Prefer `TextNode`, `Section`, and `LineEdge` unless the user clearly needs `UrlNode`, `ImageNode`, `SvgNode`, `ConnectPoint`, `MultiTargetUndirectedEdge`, or `PenStroke`.
 - If the user provides a reference image, preserve the logical structure first, then approximate layout.
 - After generating from an image, explicitly tell the user the `.prg` is a reconstructed approximation, not a pixel-perfect import.
@@ -153,6 +166,7 @@ Do not ignore containment overlap. If one block fully contains another block, th
 - By default, treat `200px` edge-to-edge clearance as required. If the user specifies a different clearance rule such as "300px around each unit must stay empty", run `check_overlap.py` with `--min-gap 300` and treat any spacing violation as a failure.
 - Treat any direct operator-to-operator link as invalid. Two operator blocks are only legal when they are separated by exactly one blank intermediate register node.
 - Let the model decide whether to run `auto_fix_layout.py` or `auto_fix_operation_links.py` after reading validation output. Keep detection and repair as separate steps.
+- Treat a straight `LineEdge` that enters one side of a block and exits another side as invalid once layout is finalized. Route it by inserting `ConnectPoint` detours after overlap/spacing checks pass.
 - When the user cares about exact content, create an `expect.json` file and run content validation.
 
 ## References

@@ -4,13 +4,11 @@ import argparse
 import json
 from pathlib import Path
 
+import geometry_prg_tools as geom
 from prg_tools import (
     auto_fix_layout,
     auto_fix_operation_block_links,
     edit_document,
-    find_overlaps,
-    find_spacing_violations,
-    generate_prg_from_spec,
     inspect_document,
     read_prg,
     validate_document,
@@ -35,7 +33,7 @@ def cmd_inspect(args: argparse.Namespace) -> int:
 
 def cmd_generate(args: argparse.Namespace) -> int:
     spec = json.loads(args.spec.read_text(encoding="utf-8"))
-    stage, attachments, metadata, tags, references = generate_prg_from_spec(spec)
+    stage, attachments, metadata, tags, references = geom.generate_prg_from_spec(spec)
     write_prg(
         args.output,
         stage=stage,
@@ -63,28 +61,14 @@ def cmd_validate(args: argparse.Namespace) -> int:
 
 
 def cmd_overlap(args: argparse.Namespace) -> int:
-    document = read_prg(args.project)
-    overlap_result = find_overlaps(
-        document,
+    result = geom.find_overlaps(
+        geom.read_prg(args.project),
         include_sections=not args.exclude_sections,
         include_points=args.include_points,
         min_overlap_area=args.min_area,
         ignore_containment=args.ignore_containment,
+        min_gap=args.min_gap,
     )
-    spacing_result = None
-    if args.min_gap > 0:
-        spacing_result = find_spacing_violations(
-            document,
-            include_sections=not args.exclude_sections,
-            include_points=args.include_points,
-            min_gap=args.min_gap,
-            ignore_containment=args.ignore_containment,
-        )
-    result = {
-        "ok": overlap_result["ok"] and (spacing_result["ok"] if spacing_result else True),
-        "overlap": overlap_result,
-        "spacing": spacing_result,
-    }
     print_json(result, args.indent)
     return 0 if result["ok"] else 1
 
@@ -179,6 +163,38 @@ def cmd_edit(args: argparse.Namespace) -> int:
     return 0 if result["ok"] else 1
 
 
+def cmd_route_edge_crossings(args: argparse.Namespace) -> int:
+    document = geom.read_prg(args.input)
+    before = geom.detect_edge_block_crossings(document, include_sections=args.include_sections)
+    fix = geom.insert_connect_points_for_crossing_edges(
+        document.stage,
+        clearance=args.clearance,
+        point_size=args.point_size,
+        include_sections=args.include_sections,
+    )
+    output_path = (args.output or args.input).resolve()
+    geom.write_prg(
+        output_path,
+        stage=document.stage,
+        metadata=document.metadata,
+        tags=document.tags,
+        references=document.references,
+        attachments=document.attachments,
+    )
+    after = geom.detect_edge_block_crossings(geom.read_prg(output_path), include_sections=args.include_sections)
+    print_json(
+        {
+            "input": str(args.input.resolve()),
+            "output": str(output_path),
+            "before": before,
+            "fix": fix,
+            "after": after,
+        },
+        args.indent,
+    )
+    return 0 if after["ok"] else 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Unified CLI for Project Graph .prg generation, inspection, editing, validation, and repair.")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -213,7 +229,7 @@ def build_parser() -> argparse.ArgumentParser:
     overlap_parser.add_argument("--include-points", action="store_true", help="Include ConnectPoint objects in checks")
     overlap_parser.add_argument("--exclude-sections", action="store_true", help="Exclude Section bounds from checks")
     overlap_parser.add_argument("--min-area", type=float, default=1.0, help="Minimum overlap area to report")
-    overlap_parser.add_argument("--min-gap", type=float, default=200.0, help="Minimum required edge-to-edge spacing between blocks")
+    overlap_parser.add_argument("--min-gap", type=float, default=geom.DEFAULT_MIN_GAP, help="Minimum required edge-to-edge spacing between blocks")
     overlap_parser.add_argument("--ignore-containment", action="store_true", help="Ignore full containment and only report partial overlaps")
     add_common_indent_argument(overlap_parser)
     overlap_parser.set_defaults(func=cmd_overlap)
@@ -249,6 +265,18 @@ def build_parser() -> argparse.ArgumentParser:
     fix_op_parser.add_argument("--vertical-offset", type=float, default=140.0, help="Vertical offset for inserted intermediate blocks")
     add_common_indent_argument(fix_op_parser)
     fix_op_parser.set_defaults(func=cmd_fix_op_links)
+
+    route_parser = subparsers.add_parser(
+        "route-edge-crossings",
+        help="Insert ConnectPoint detours when a LineEdge fully passes through a block",
+    )
+    route_parser.add_argument("input", type=Path, help="Path to the input .prg file")
+    route_parser.add_argument("output", type=Path, nargs="?", help="Path to the output .prg file; defaults to input path")
+    route_parser.add_argument("--include-sections", action="store_true", help="Also treat Section bounds as blocking geometry")
+    route_parser.add_argument("--clearance", type=float, default=48.0, help="Routing clearance outside the crossed block")
+    route_parser.add_argument("--point-size", type=float, default=30.0, help="Inserted ConnectPoint square size")
+    add_common_indent_argument(route_parser)
+    route_parser.set_defaults(func=cmd_route_edge_crossings)
 
     return parser
 
