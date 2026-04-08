@@ -5,8 +5,11 @@ This repository contains small public-facing Codex skills.
 ## Included Skills
 
 - `de-ai-academic-prose`
-  Rewrite academic prose to reduce obvious AI tone while preserving meaning
-  and technical accuracy.
+  降低学术文本AI味并保留严谨性。
+- `academic-paper-review`
+  快速审阅论文结构论证与表达问题。
+- `rewrite-by-example`
+  参考示例风格重写文本并保持原意。
 - `ngspice-matplotlib-plot`
   Run ngspice netlists and generate waveform plots with matplotlib.
 - `fix-review-loop`

@@ -138,6 +138,23 @@ Assign 2-4 diagnostic tags before you rewrite. Reuse the tag names from
 - `generic recap`
 - `over-balanced contrast`
 
+Cross-sentence tags (read `markers.md` for definitions and examples):
+
+- `broken connector logic`
+- `pseudo progression`
+- `circular paragraph`
+- `forced symmetry`
+- `weak evidence link`
+- `paragraph drift`
+
+The cross-sentence tags cannot be detected by the analysis script. The
+script reports density and uniformity of local markers, not whether the
+logic between sentences actually holds. To assign any of the cross-sentence
+tags you must read the passage yourself and judge the relationship between
+adjacent sentences or across a whole paragraph. When you do assign one,
+name the specific sentence or sentence pair where the broken relationship
+appears — not just the paragraph.
+
 Then assign a severity level based on both the local prose and the document
 statistics:
 

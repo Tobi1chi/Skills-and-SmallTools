@@ -21,6 +21,55 @@ Assign 2-4 tags before rewriting.
   paragraph
 - `generic recap`: low-information paragraph endings or summary lines
 
+## Cross-sentence tags
+
+These tags describe problems that live in the relationships between
+sentences or across a whole paragraph, not inside any single sentence.
+A script cannot detect them — they require reading the text and judging
+whether the logic actually holds. Use them only when you have read the
+passage, not when you are only looking at statistics.
+
+- `broken connector logic`: a connector like `however`, `therefore`, or
+  `moreover` is present, but the relationship between the sentences it
+  joins is not actually contrast, causation, or addition. The connector
+  marks a logical relation the content does not support. Example:
+  "The dataset contains 1200 samples. However, we also used a validation
+  split." — there is no contrast, only addition.
+
+- `pseudo progression`: the prose uses progression markers (`first`,
+  `second`, `finally`, `more importantly`, `furthermore`) to stage a
+  sequence of points, but the later points are not actually stronger,
+  deeper, or more consequential than the earlier ones. The sequence is
+  parallel content wearing a staircase.
+
+- `circular paragraph`: the paragraph opens with a claim, expands it in
+  the middle, and closes by restating the same claim in different words.
+  Information gain across the paragraph is close to zero. Distinguish
+  from `generic recap` — `generic recap` is about a low-information
+  closing sentence; `circular paragraph` is about the whole paragraph
+  going nowhere.
+
+- `forced symmetry`: two things are compared in a perfectly balanced
+  two-sided structure (`on one hand... on the other hand`, `while X...,
+  Y...`, `both X and Y share...`) when the actual evidence or argument
+  is not symmetric. Real analyses usually lean toward one side; AI
+  defaults to balance.
+
+- `weak evidence link`: a sentence presents evidence or a citation to
+  support a claim, but the evidence is only topically adjacent to the
+  claim rather than actually supporting it. Phrases like `as shown by`,
+  `building on`, `in line with` followed by a reference that does not
+  really entail the current point.
+
+- `paragraph drift`: the paragraph starts on topic A, gradually slides
+  to topic B in the middle, and ends on topic C, without the author
+  acknowledging the drift. The sentence-to-sentence transitions feel
+  smooth, which is exactly why it is hard to catch — each hop is small.
+
+When using these tags, name the specific sentence or sentence pair that
+exhibits the problem, not just the paragraph. The user needs to see
+where the broken relationship is, not just that something is off.
+
 ## Severity scale
 
 - `low`: one or two markers are present, but the prose still feels mostly
