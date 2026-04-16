@@ -1,0 +1,278 @@
+{
+  "graphIntent": {
+    "primaryType": "dense_network",
+    "secondaryTypes": [],
+    "confidence": 0.9,
+    "evidence": [
+      "节点之间是多对多协作关系，不存在单一主流程",
+      "多个节点同时承担连接枢纽角色"
+    ],
+    "extractionFocus": [
+      "抽取核心能力节点",
+      "保留横向协作和依赖关系",
+      "避免把网络误建成层级流程"
+    ],
+    "fallbackType": "clustered"
+  },
+  "layoutPlan": {
+    "strategy": "force",
+    "direction": "right",
+    "root": null,
+    "mainPath": [],
+    "clusters": [],
+    "spacing": {
+      "nodeGap": 220,
+      "layerGap": 360,
+      "clusterGap": 460,
+      "minGap": 200
+    },
+    "seed": 17
+  },
+  "routingPlan": {
+    "insertConnectPoints": false
+  },
+  "metadata": {
+    "version": "2.2.0"
+  },
+  "objects": [
+    {
+      "id": "user_goal",
+      "type": "TextNode",
+      "text": "用户目标",
+      "x": 0,
+      "y": 0,
+      "width": 180,
+      "height": 80
+    },
+    {
+      "id": "graph_intent",
+      "type": "TextNode",
+      "text": "graphIntent\n图类型判断",
+      "x": 0,
+      "y": 0,
+      "width": 240,
+      "height": 100
+    },
+    {
+      "id": "spec_builder",
+      "type": "TextNode",
+      "text": "Spec Builder\n对象与边抽取",
+      "x": 0,
+      "y": 0,
+      "width": 260,
+      "height": 100
+    },
+    {
+      "id": "layout_engine",
+      "type": "TextNode",
+      "text": "Layout Engine\nforce 布局",
+      "x": 0,
+      "y": 0,
+      "width": 260,
+      "height": 100
+    },
+    {
+      "id": "geometry_checker",
+      "type": "TextNode",
+      "text": "Geometry Checker\n重叠与间距",
+      "x": 0,
+      "y": 0,
+      "width": 300,
+      "height": 100
+    },
+    {
+      "id": "prg_writer",
+      "type": "TextNode",
+      "text": "PRG Writer\nmsgpack / zip",
+      "x": 0,
+      "y": 0,
+      "width": 270,
+      "height": 100
+    },
+    {
+      "id": "validator",
+      "type": "TextNode",
+      "text": "Validator\n结构和内容校验",
+      "x": 0,
+      "y": 0,
+      "width": 300,
+      "height": 100
+    },
+    {
+      "id": "edge_router",
+      "type": "TextNode",
+      "text": "Edge Router\n可选 ConnectPoint",
+      "x": 0,
+      "y": 0,
+      "width": 310,
+      "height": 100
+    },
+    {
+      "id": "examples",
+      "type": "TextNode",
+      "text": "Examples\n可复现实例",
+      "x": 0,
+      "y": 0,
+      "width": 260,
+      "height": 100
+    },
+    {
+      "id": "docs",
+      "type": "TextNode",
+      "text": "Docs\nSkill / references",
+      "x": 0,
+      "y": 0,
+      "width": 280,
+      "height": 100
+    },
+    {
+      "id": "tests",
+      "type": "TextNode",
+      "text": "Tests\nunittest 回归",
+      "x": 0,
+      "y": 0,
+      "width": 250,
+      "height": 100
+    },
+    {
+      "id": "e1",
+      "type": "LineEdge",
+      "from": "user_goal",
+      "to": "graph_intent",
+      "text": "意图"
+    },
+    {
+      "id": "e2",
+      "type": "LineEdge",
+      "from": "user_goal",
+      "to": "spec_builder",
+      "text": "需求"
+    },
+    {
+      "id": "e3",
+      "type": "LineEdge",
+      "from": "graph_intent",
+      "to": "spec_builder",
+      "text": "抽取焦点"
+    },
+    {
+      "id": "e4",
+      "type": "LineEdge",
+      "from": "graph_intent",
+      "to": "layout_engine",
+      "text": "策略"
+    },
+    {
+      "id": "e5",
+      "type": "LineEdge",
+      "from": "spec_builder",
+      "to": "layout_engine",
+      "text": "节点边"
+    },
+    {
+      "id": "e6",
+      "type": "LineEdge",
+      "from": "layout_engine",
+      "to": "geometry_checker",
+      "text": "坐标"
+    },
+    {
+      "id": "e7",
+      "type": "LineEdge",
+      "from": "geometry_checker",
+      "to": "layout_engine",
+      "text": "间距反馈"
+    },
+    {
+      "id": "e8",
+      "type": "LineEdge",
+      "from": "layout_engine",
+      "to": "prg_writer",
+      "text": "最终坐标"
+    },
+    {
+      "id": "e9",
+      "type": "LineEdge",
+      "from": "prg_writer",
+      "to": "validator",
+      "text": "文件"
+    },
+    {
+      "id": "e10",
+      "type": "LineEdge",
+      "from": "validator",
+      "to": "geometry_checker",
+      "text": "复核"
+    },
+    {
+      "id": "e11",
+      "type": "LineEdge",
+      "from": "geometry_checker",
+      "to": "edge_router",
+      "text": "可选路由"
+    },
+    {
+      "id": "e12",
+      "type": "LineEdge",
+      "from": "edge_router",
+      "to": "prg_writer",
+      "text": "ConnectPoint"
+    },
+    {
+      "id": "e13",
+      "type": "LineEdge",
+      "from": "docs",
+      "to": "graph_intent",
+      "text": "规则"
+    },
+    {
+      "id": "e14",
+      "type": "LineEdge",
+      "from": "docs",
+      "to": "spec_builder",
+      "text": "schema"
+    },
+    {
+      "id": "e15",
+      "type": "LineEdge",
+      "from": "docs",
+      "to": "examples",
+      "text": "模板"
+    },
+    {
+      "id": "e16",
+      "type": "LineEdge",
+      "from": "examples",
+      "to": "tests",
+      "text": "样例"
+    },
+    {
+      "id": "e17",
+      "type": "LineEdge",
+      "from": "tests",
+      "to": "validator",
+      "text": "断言"
+    },
+    {
+      "id": "e18",
+      "type": "LineEdge",
+      "from": "tests",
+      "to": "layout_engine",
+      "text": "策略覆盖"
+    },
+    {
+      "id": "e19",
+      "type": "LineEdge",
+      "from": "examples",
+      "to": "prg_writer",
+      "text": "输出"
+    },
+    {
+      "id": "e20",
+      "type": "LineEdge",
+      "from": "edge_router",
+      "to": "examples",
+      "text": "路由案例"
+    }
+  ]
+}
