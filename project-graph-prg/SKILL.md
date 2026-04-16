@@ -18,39 +18,48 @@ Use Unicode text in generated content. Write JSON, Markdown, and script I/O as U
    - validate content expectations
    - check layout overlaps
 2. If generating from prose or an image, translate the request into an intermediate JSON spec.
+   - First produce `graphIntent` with `primaryType`, `confidence`, `evidence`, `extractionFocus`, and `fallbackType`.
+   - Use `graphIntent` to guide typed extraction, grouping, edge semantics, and `layoutPlan`.
+   - Do not build `objects` first and infer layout later.
    - Use [references/spec-format.md](references/spec-format.md) for the supported object schema.
-3. If editing an existing `.prg`, translate the request into a UTF-8 JSON edit patch.
+3. After generating a spec, run `prg_cli.py classify spec.json`.
+   - If metrics such as `hasCycles`, `density`, `component_count`, or `root_count` contradict `graphIntent`, update `graphIntent/layoutPlan` before `generate`.
+4. If editing an existing `.prg`, translate the request into a UTF-8 JSON edit patch.
    - Use [references/edit-patch-format.md](references/edit-patch-format.md) for selectors and edit operations.
    - Use [references/prompt-templates.md](references/prompt-templates.md) for prompt wording and output expectations.
-4. Prefer the unified CLI [scripts/prg_cli.py](scripts/prg_cli.py) with `uv run --with msgpack --python 3.12 ...`.
+5. Prefer the unified CLI [scripts/prg_cli.py](scripts/prg_cli.py) with `uv run --with msgpack --python 3.12 ...`.
    - The older single-purpose scripts are still available for compatibility.
-5. After generation or edit, run validation in this order:
+6. After generation or edit, run validation in this order:
    - `validate_prg.py`
    - `validate_operation_links.py` when the graph contains logic/operator blocks such as `#ADD#` or `#DIV#`
    - `check_overlap.py` last
-6. Inspect the validation results and decide whether repair is appropriate.
-7. Repair logic before layout.
+7. Inspect the validation results and decide whether repair is appropriate.
+8. Repair logic before layout.
    - Run `auto_fix_operation_links.py` only for illegal operator-link problems.
    - Run `auto_fix_layout.py` only after logic is settled, because earlier repairs may change layout.
-8. If the final overlap/spacing check passes, run edge routing last.
-   - Use `route_edge_crossings.py` or `prg_cli.py route-edge-crossings` to split a `LineEdge` into `A -> ConnectPoint -> B` when the edge fully passes through a block.
-9. If validation still fails after repair, adjust the JSON spec or edit patch and retry instead of hand-editing the binary archive.
+9. If the final overlap/spacing check passes, decide whether edge routing should insert `ConnectPoint` detours.
+   - Run `route_edge_crossings.py` or `prg_cli.py route-edge-crossings` only when the user asks for routed edges or `routingPlan.insertConnectPoints` is true.
+   - If ConnectPoint insertion is disabled, report that straight edges may pass through blocks and do not run the routing command.
+10. If validation still fails after repair, adjust the JSON spec or edit patch and retry instead of hand-editing the binary archive.
 
 ## Model Workflow Template
 
 When using this skill, prefer to make the model follow this explicit workflow in the prompt instead of relying on a one-shot command:
 
 1. Build or inspect the UTF-8 JSON/spec context first.
-2. Run `prg_cli.py generate`, `prg_cli.py edit`, or `prg_cli.py inspect` as appropriate.
-3. Run `prg_cli.py validate`.
-4. If the graph contains operator blocks such as `#ADD#`, `#DIV#`, or `#SIN#`, run `prg_cli.py validate-op`.
-5. Read the validation output and decide whether logic repair is appropriate.
-6. If needed, run `prg_cli.py fix-op-links`, then re-run `prg_cli.py validate-op`.
-7. Run `prg_cli.py overlap` last for geometry validation.
-8. Read the overlap/spacing output and decide whether layout repair is appropriate.
-9. If needed, run `prg_cli.py fix-layout`, then re-run `prg_cli.py overlap`.
-10. After overlap passes, run `prg_cli.py route-edge-crossings`.
-11. Report what passed, what failed, and whether the final `.prg` is acceptable.
+2. For generation, classify the graph type before extracting nodes and edges.
+3. Generate `graphIntent`, typed extraction, `layoutPlan`, and `objects` in that order.
+4. Run `prg_cli.py classify` on generated specs and reconcile metric conflicts before generation.
+5. Run `prg_cli.py generate`, `prg_cli.py edit`, or `prg_cli.py inspect` as appropriate.
+6. Run `prg_cli.py validate`.
+7. If the graph contains operator blocks such as `#ADD#`, `#DIV#`, or `#SIN#`, run `prg_cli.py validate-op`.
+8. Read the validation output and decide whether logic repair is appropriate.
+9. If needed, run `prg_cli.py fix-op-links`, then re-run `prg_cli.py validate-op`.
+10. Run `prg_cli.py overlap` last for geometry validation.
+11. Read the overlap/spacing output and decide whether layout repair is appropriate.
+12. If needed, run `prg_cli.py fix-layout --min-gap 200`, then re-run `prg_cli.py overlap`.
+13. After overlap passes, decide whether to run `prg_cli.py route-edge-crossings` based on user preference or `routingPlan.insertConnectPoints`.
+14. Report whether ConnectPoint insertion was enabled, what passed, what failed, and whether the final `.prg` is acceptable.
 
 Do not auto-repair blindly. The model should inspect validation results first, then decide whether repair is safe.
 
@@ -59,6 +68,8 @@ Do not auto-repair blindly. The model should inspect validation results first, t
 The skill bundles these scripts in [scripts](scripts):
 
 - [prg_cli.py](scripts/prg_cli.py): unified CLI entry point for inspect/generate/edit/validate/overlap/fix/route flows
+- [graph_layout.py](scripts/graph_layout.py): graph classification, graphIntent/layoutPlan recommendation, native coordinate layout, and strategy dispatch
+- [layout_prg.py](scripts/layout_prg.py): single-purpose compatibility wrapper for re-layout of existing `.prg` files
 - [edit_prg.py](scripts/edit_prg.py): apply a semantic JSON patch to an existing `.prg`
 - [generate_prg.py](scripts/generate_prg.py): create a `.prg` from a JSON spec
 - [inspect_prg.py](scripts/inspect_prg.py): summarize archive contents, nodes, edges, sections, and drawings
@@ -81,6 +92,24 @@ Generate:
 
 ```powershell
 uv run --with msgpack --python 3.12 .\scripts\prg_cli.py generate spec.json out.prg
+```
+
+Generate without automatic layout:
+
+```powershell
+uv run --with msgpack --python 3.12 .\scripts\prg_cli.py generate spec.json out.prg --layout off
+```
+
+Classify a spec before generation:
+
+```powershell
+uv run --with msgpack --python 3.12 .\scripts\prg_cli.py classify spec.json
+```
+
+Re-layout an existing `.prg`:
+
+```powershell
+uv run --with msgpack --python 3.12 .\scripts\prg_cli.py layout input.prg output.prg --strategy auto --direction right --min-gap 200 --seed 7
 ```
 
 Edit:
@@ -122,7 +151,7 @@ uv run --with msgpack --python 3.12 .\scripts\prg_cli.py overlap out.prg --exclu
 Auto-fix layout at the end of the workflow:
 
 ```powershell
-uv run --with msgpack --python 3.12 .\scripts\prg_cli.py fix-layout out.prg fixed.prg
+uv run --with msgpack --python 3.12 .\scripts\prg_cli.py fix-layout out.prg fixed.prg --min-gap 200
 ```
 
 Route edge crossings after overlap passes:
@@ -148,12 +177,16 @@ Do not ignore containment overlap. If one block fully contains another block, th
 ## Generation Rules
 
 - Build the `.prg` through the JSON spec, not by mutating msgpack manually.
+- For generation, decide `graphIntent` before extracting `objects`; `graphIntent` must guide extraction, grouping, edge semantics, and `layoutPlan`.
+- Use `tree`, `mindmap`, `dag`, `cyclic_dependency`, `dense_network`, `pipeline`, or `clustered` as first-class graph types.
+- Use native layout strategies `tree`, `mindmap`, `layered`, `scc-layered`, `force`, `pipeline`, and `clustered`; do not depend on Mermaid, ELK, Dagre, or NetworkX at runtime.
+- Run `prg_cli.py classify` after spec generation and reconcile conflicts before `prg_cli.py generate`.
 - Use Unicode for node labels, section titles, and inserted helper text. Store JSON/reference files in UTF-8.
 - Generated files should rely on recomputed text-node bounds, not placeholder width/height guesses.
 - Keep text blocks separated enough that `check_overlap.py` returns no overlaps or spacing violations.
 - Leave overlap detection and layout repair until the end of the workflow, after logic and structural checks.
 - If overlap exists at the final layout stage, prefer `auto_fix_layout.py` before manually repositioning objects.
-- After layout passes, check whether any straight edge fully passes through a block and route it with `route_edge_crossings.py`.
+- After layout passes, check whether the user wants ConnectPoint-based edge routing. If yes, run `route_edge_crossings.py`; if no, skip it and state that edge-through-block detection was intentionally not enforced.
 - Prefer `TextNode`, `Section`, and `LineEdge` unless the user clearly needs `UrlNode`, `ImageNode`, `SvgNode`, `ConnectPoint`, `MultiTargetUndirectedEdge`, or `PenStroke`.
 - If the user provides a reference image, preserve the logical structure first, then approximate layout.
 - After generating from an image, explicitly tell the user the `.prg` is a reconstructed approximation, not a pixel-perfect import.
@@ -166,7 +199,7 @@ Do not ignore containment overlap. If one block fully contains another block, th
 - By default, treat `200px` edge-to-edge clearance as required. If the user specifies a different clearance rule such as "300px around each unit must stay empty", run `check_overlap.py` with `--min-gap 300` and treat any spacing violation as a failure.
 - Treat any direct operator-to-operator link as invalid. Two operator blocks are only legal when they are separated by exactly one blank intermediate register node.
 - Let the model decide whether to run `auto_fix_layout.py` or `auto_fix_operation_links.py` after reading validation output. Keep detection and repair as separate steps.
-- Treat a straight `LineEdge` that enters one side of a block and exits another side as invalid once layout is finalized. Route it by inserting `ConnectPoint` detours after overlap/spacing checks pass.
+- Treat a straight `LineEdge` that enters one side of a block and exits another side as invalid only when ConnectPoint-based edge routing is enabled. Route it by inserting `ConnectPoint` detours after overlap/spacing checks pass.
 - When the user cares about exact content, create an `expect.json` file and run content validation.
 
 ## References

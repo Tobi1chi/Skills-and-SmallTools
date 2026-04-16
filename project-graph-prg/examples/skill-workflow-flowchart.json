@@ -1,0 +1,582 @@
+{
+  "graphIntent": {
+    "primaryType": "cyclic_dependency",
+    "secondaryTypes": [
+      "pipeline",
+      "clustered"
+    ],
+    "confidence": 0.92,
+    "evidence": [
+      "技能流程包含生成、复核、验证、修复和重试环",
+      "classify 冲突、操作块修复、布局修复都会回到前一步重新验证"
+    ],
+    "extractionFocus": [
+      "抽取主流程节点",
+      "保留决策节点和反馈边",
+      "按生成、编辑、验证、收尾阶段分组"
+    ],
+    "fallbackType": "dag"
+  },
+  "layoutPlan": {
+    "strategy": "clustered",
+    "direction": "right",
+    "root": "request",
+    "mainPath": [
+      "request",
+      "task_type",
+      "graph_intent",
+      "typed_extract",
+      "layout_plan",
+      "build_spec",
+      "classify_spec",
+      "generate_prg",
+      "validate_prg",
+      "overlap_check",
+      "route_decision",
+      "route_edges",
+      "done"
+    ],
+    "clusters": [
+      {
+        "id": "phase-input",
+        "label": "输入与分派",
+        "nodes": [
+          "request",
+          "task_type",
+          "inspect_existing"
+        ]
+      },
+      {
+        "id": "phase-spec",
+        "label": "Spec 生成与复核",
+        "nodes": [
+          "graph_intent",
+          "typed_extract",
+          "layout_plan",
+          "build_spec",
+          "classify_spec",
+          "metrics_conflict",
+          "update_plan"
+        ]
+      },
+      {
+        "id": "phase-edit",
+        "label": "编辑入口",
+        "nodes": [
+          "edit_patch",
+          "edit_prg"
+        ]
+      },
+      {
+        "id": "phase-validate",
+        "label": "验证与修复",
+        "nodes": [
+          "generate_prg",
+          "validate_prg",
+          "has_ops",
+          "validate_op",
+          "logic_fix_safe",
+          "fix_op",
+          "overlap_check",
+          "layout_fix_safe",
+          "fix_layout"
+        ]
+      },
+      {
+        "id": "phase-finish",
+        "label": "收尾",
+        "nodes": [
+          "route_decision",
+          "route_edges",
+          "done"
+        ]
+      }
+    ],
+    "spacing": {
+      "nodeGap": 220,
+      "layerGap": 360,
+      "clusterGap": 460,
+      "minGap": 200
+    },
+    "seed": 7
+  },
+  "routingPlan": {
+    "insertConnectPoints": false
+  },
+  "metadata": {
+    "version": "2.2.0"
+  },
+  "objects": [
+    {
+      "id": "request",
+      "type": "TextNode",
+      "text": "用户请求",
+      "x": 0,
+      "y": 0,
+      "width": 180,
+      "height": 80
+    },
+    {
+      "id": "task_type",
+      "type": "TextNode",
+      "text": "判断任务类型\ninspect / generate / edit / validate / overlap",
+      "x": 0,
+      "y": 0,
+      "width": 360,
+      "height": 120
+    },
+    {
+      "id": "inspect_existing",
+      "type": "TextNode",
+      "text": "inspect 现有 .prg\n读取结构、节点、边、Section",
+      "x": 0,
+      "y": 0,
+      "width": 320,
+      "height": 120
+    },
+    {
+      "id": "graph_intent",
+      "type": "TextNode",
+      "text": "先产出 graphIntent\nprimaryType / confidence / evidence / extractionFocus / fallbackType",
+      "x": 0,
+      "y": 0,
+      "width": 440,
+      "height": 150
+    },
+    {
+      "id": "typed_extract",
+      "type": "TextNode",
+      "text": "按图类型抽取\n实体、分组、边语义",
+      "x": 0,
+      "y": 0,
+      "width": 300,
+      "height": 120
+    },
+    {
+      "id": "layout_plan",
+      "type": "TextNode",
+      "text": "生成 layoutPlan\nstrategy / direction / spacing / seed",
+      "x": 0,
+      "y": 0,
+      "width": 340,
+      "height": 120
+    },
+    {
+      "id": "build_spec",
+      "type": "TextNode",
+      "text": "生成 UTF-8 JSON spec\nobjects / Sections / edges",
+      "x": 0,
+      "y": 0,
+      "width": 330,
+      "height": 120
+    },
+    {
+      "id": "classify_spec",
+      "type": "TextNode",
+      "text": "prg_cli.py classify spec.json\n脚本复核指标和推荐 plan",
+      "x": 0,
+      "y": 0,
+      "width": 380,
+      "height": 120
+    },
+    {
+      "id": "metrics_conflict",
+      "type": "TextNode",
+      "text": "指标是否冲突？\nhasCycles / density / component_count / root_count",
+      "x": 0,
+      "y": 0,
+      "width": 420,
+      "height": 130
+    },
+    {
+      "id": "update_plan",
+      "type": "TextNode",
+      "text": "更新 graphIntent / layoutPlan\n再复核",
+      "x": 0,
+      "y": 0,
+      "width": 320,
+      "height": 120
+    },
+    {
+      "id": "generate_prg",
+      "type": "TextNode",
+      "text": "prg_cli.py generate\n默认 --layout auto",
+      "x": 0,
+      "y": 0,
+      "width": 310,
+      "height": 110
+    },
+    {
+      "id": "edit_patch",
+      "type": "TextNode",
+      "text": "编辑入口\n构造 UTF-8 edit patch",
+      "x": 0,
+      "y": 0,
+      "width": 300,
+      "height": 110
+    },
+    {
+      "id": "edit_prg",
+      "type": "TextNode",
+      "text": "prg_cli.py edit\n优先语义补丁，避免重建",
+      "x": 0,
+      "y": 0,
+      "width": 330,
+      "height": 110
+    },
+    {
+      "id": "validate_prg",
+      "type": "TextNode",
+      "text": "prg_cli.py validate\n结构与期望内容校验",
+      "x": 0,
+      "y": 0,
+      "width": 330,
+      "height": 110
+    },
+    {
+      "id": "has_ops",
+      "type": "TextNode",
+      "text": "是否包含操作块？\n#ADD# / #DIV# / #SIN#",
+      "x": 0,
+      "y": 0,
+      "width": 320,
+      "height": 120
+    },
+    {
+      "id": "validate_op",
+      "type": "TextNode",
+      "text": "prg_cli.py validate-op\n检查操作块连接合法性",
+      "x": 0,
+      "y": 0,
+      "width": 340,
+      "height": 110
+    },
+    {
+      "id": "logic_fix_safe",
+      "type": "TextNode",
+      "text": "逻辑修复是否必要且安全？\n先读验证结果，不盲修",
+      "x": 0,
+      "y": 0,
+      "width": 360,
+      "height": 120
+    },
+    {
+      "id": "fix_op",
+      "type": "TextNode",
+      "text": "prg_cli.py fix-op-links\n插入空白中间寄存器后重验",
+      "x": 0,
+      "y": 0,
+      "width": 380,
+      "height": 120
+    },
+    {
+      "id": "overlap_check",
+      "type": "TextNode",
+      "text": "prg_cli.py overlap --min-gap 200\n最后做几何间距校验",
+      "x": 0,
+      "y": 0,
+      "width": 390,
+      "height": 120
+    },
+    {
+      "id": "layout_fix_safe",
+      "type": "TextNode",
+      "text": "布局修复是否必要且安全？\n逻辑稳定后再处理布局",
+      "x": 0,
+      "y": 0,
+      "width": 370,
+      "height": 120
+    },
+    {
+      "id": "fix_layout",
+      "type": "TextNode",
+      "text": "prg_cli.py fix-layout --min-gap 200\n重排后再跑 overlap",
+      "x": 0,
+      "y": 0,
+      "width": 390,
+      "height": 120
+    },
+    {
+      "id": "route_decision",
+      "type": "TextNode",
+      "text": "是否插入 ConnectPoint？\n可选：按需路由穿块边",
+      "x": 0,
+      "y": 0,
+      "width": 380,
+      "height": 120
+    },
+    {
+      "id": "route_edges",
+      "type": "TextNode",
+      "text": "prg_cli.py route-edge-crossings\n通过 ConnectPoint 绕开穿块边",
+      "x": 0,
+      "y": 0,
+      "width": 410,
+      "height": 120
+    },
+    {
+      "id": "done",
+      "type": "TextNode",
+      "text": "交付 .prg\n报告通过项、失败项、最终状态",
+      "x": 0,
+      "y": 0,
+      "width": 360,
+      "height": 120
+    },
+    {
+      "id": "edge-request-task",
+      "type": "LineEdge",
+      "from": "request",
+      "to": "task_type"
+    },
+    {
+      "id": "edge-task-inspect",
+      "type": "LineEdge",
+      "from": "task_type",
+      "to": "inspect_existing",
+      "text": "inspect"
+    },
+    {
+      "id": "edge-inspect-validate",
+      "type": "LineEdge",
+      "from": "inspect_existing",
+      "to": "validate_prg"
+    },
+    {
+      "id": "edge-task-generate",
+      "type": "LineEdge",
+      "from": "task_type",
+      "to": "graph_intent",
+      "text": "generate"
+    },
+    {
+      "id": "edge-intent-extract",
+      "type": "LineEdge",
+      "from": "graph_intent",
+      "to": "typed_extract"
+    },
+    {
+      "id": "edge-extract-layout",
+      "type": "LineEdge",
+      "from": "typed_extract",
+      "to": "layout_plan"
+    },
+    {
+      "id": "edge-layout-spec",
+      "type": "LineEdge",
+      "from": "layout_plan",
+      "to": "build_spec"
+    },
+    {
+      "id": "edge-spec-classify",
+      "type": "LineEdge",
+      "from": "build_spec",
+      "to": "classify_spec"
+    },
+    {
+      "id": "edge-classify-conflict",
+      "type": "LineEdge",
+      "from": "classify_spec",
+      "to": "metrics_conflict"
+    },
+    {
+      "id": "edge-conflict-update",
+      "type": "LineEdge",
+      "from": "metrics_conflict",
+      "to": "update_plan",
+      "text": "有冲突"
+    },
+    {
+      "id": "edge-update-classify",
+      "type": "LineEdge",
+      "from": "update_plan",
+      "to": "classify_spec",
+      "text": "重新复核"
+    },
+    {
+      "id": "edge-conflict-generate",
+      "type": "LineEdge",
+      "from": "metrics_conflict",
+      "to": "generate_prg",
+      "text": "无冲突"
+    },
+    {
+      "id": "edge-task-edit",
+      "type": "LineEdge",
+      "from": "task_type",
+      "to": "edit_patch",
+      "text": "edit"
+    },
+    {
+      "id": "edge-edit-patch",
+      "type": "LineEdge",
+      "from": "edit_patch",
+      "to": "edit_prg"
+    },
+    {
+      "id": "edge-edit-validate",
+      "type": "LineEdge",
+      "from": "edit_prg",
+      "to": "validate_prg"
+    },
+    {
+      "id": "edge-generate-validate",
+      "type": "LineEdge",
+      "from": "generate_prg",
+      "to": "validate_prg"
+    },
+    {
+      "id": "edge-validate-ops",
+      "type": "LineEdge",
+      "from": "validate_prg",
+      "to": "has_ops"
+    },
+    {
+      "id": "edge-has-ops-validate",
+      "type": "LineEdge",
+      "from": "has_ops",
+      "to": "validate_op",
+      "text": "是"
+    },
+    {
+      "id": "edge-has-ops-overlap",
+      "type": "LineEdge",
+      "from": "has_ops",
+      "to": "overlap_check",
+      "text": "否"
+    },
+    {
+      "id": "edge-validate-op-safe",
+      "type": "LineEdge",
+      "from": "validate_op",
+      "to": "logic_fix_safe"
+    },
+    {
+      "id": "edge-logic-fix",
+      "type": "LineEdge",
+      "from": "logic_fix_safe",
+      "to": "fix_op",
+      "text": "需要且安全"
+    },
+    {
+      "id": "edge-fix-op-revalidate",
+      "type": "LineEdge",
+      "from": "fix_op",
+      "to": "validate_op",
+      "text": "重验"
+    },
+    {
+      "id": "edge-logic-overlap",
+      "type": "LineEdge",
+      "from": "logic_fix_safe",
+      "to": "overlap_check",
+      "text": "通过或不修"
+    },
+    {
+      "id": "edge-overlap-layout-safe",
+      "type": "LineEdge",
+      "from": "overlap_check",
+      "to": "layout_fix_safe"
+    },
+    {
+      "id": "edge-layout-fix",
+      "type": "LineEdge",
+      "from": "layout_fix_safe",
+      "to": "fix_layout",
+      "text": "需要且安全"
+    },
+    {
+      "id": "edge-fix-layout-overlap",
+      "type": "LineEdge",
+      "from": "fix_layout",
+      "to": "overlap_check",
+      "text": "重验"
+    },
+    {
+      "id": "edge-layout-route",
+      "type": "LineEdge",
+      "from": "layout_fix_safe",
+      "to": "route_decision",
+      "text": "通过"
+    },
+    {
+      "id": "edge-route-decision-yes",
+      "type": "LineEdge",
+      "from": "route_decision",
+      "to": "route_edges",
+      "text": "是"
+    },
+    {
+      "id": "edge-route-decision-no",
+      "type": "LineEdge",
+      "from": "route_decision",
+      "to": "done",
+      "text": "否"
+    },
+    {
+      "id": "edge-route-done",
+      "type": "LineEdge",
+      "from": "route_edges",
+      "to": "done"
+    },
+    {
+      "id": "section-input",
+      "type": "Section",
+      "text": "输入与分派",
+      "children": [
+        "request",
+        "task_type",
+        "inspect_existing"
+      ]
+    },
+    {
+      "id": "section-spec",
+      "type": "Section",
+      "text": "Spec 生成与复核",
+      "children": [
+        "graph_intent",
+        "typed_extract",
+        "layout_plan",
+        "build_spec",
+        "classify_spec",
+        "metrics_conflict",
+        "update_plan"
+      ]
+    },
+    {
+      "id": "section-edit",
+      "type": "Section",
+      "text": "编辑入口",
+      "children": [
+        "edit_patch",
+        "edit_prg"
+      ]
+    },
+    {
+      "id": "section-validate",
+      "type": "Section",
+      "text": "验证与修复",
+      "children": [
+        "generate_prg",
+        "validate_prg",
+        "has_ops",
+        "validate_op",
+        "logic_fix_safe",
+        "fix_op",
+        "overlap_check",
+        "layout_fix_safe",
+        "fix_layout"
+      ]
+    },
+    {
+      "id": "section-finish",
+      "type": "Section",
+      "text": "收尾",
+      "children": [
+        "route_decision",
+        "route_edges",
+        "done"
+      ]
+    }
+  ]
+}

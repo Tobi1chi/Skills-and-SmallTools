@@ -71,6 +71,14 @@ class RectBounds:
         return self.y + self.height
 
     @property
+    def center_x(self) -> float:
+        return self.x + self.width / 2
+
+    @property
+    def center_y(self) -> float:
+        return self.y + self.height / 2
+
+    @property
     def area(self) -> float:
         return max(self.width, 0) * max(self.height, 0)
 
@@ -153,7 +161,11 @@ def load_generate_spec(path: str | Path) -> dict[str, Any]:
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
-def generate_prg_from_spec(spec: dict[str, Any]) -> tuple[list[Any], dict[str, bytes], dict[str, Any], list[Any], dict[str, Any]]:
+def generate_prg_from_spec(
+    spec: dict[str, Any],
+    *,
+    layout: str = "auto",
+) -> tuple[list[Any], dict[str, bytes], dict[str, Any], list[Any], dict[str, Any]]:
     objects = spec.get("objects", [])
     if not isinstance(objects, list) or not objects:
         raise ValueError("Spec must contain a non-empty 'objects' list.")
@@ -757,7 +769,11 @@ class SegmentHit:
     side: str
 
 
-def generate_prg_from_spec(spec: dict[str, Any]) -> tuple[list[Any], dict[str, bytes], dict[str, Any], list[Any], dict[str, Any]]:
+def generate_prg_from_spec(
+    spec: dict[str, Any],
+    *,
+    layout: str = "auto",
+) -> tuple[list[Any], dict[str, bytes], dict[str, Any], list[Any], dict[str, Any]]:
     objects = spec.get("objects", [])
     if not isinstance(objects, list) or not objects:
         raise ValueError("Spec must contain a non-empty 'objects' list.")
@@ -776,11 +792,36 @@ def generate_prg_from_spec(spec: dict[str, Any]) -> tuple[list[Any], dict[str, b
         stage[index] = _build_object(item, id_to_index)
 
     normalize_stage_geometry(stage)
+    if layout != "off":
+        import graph_layout
+
+        graph_layout.apply_layout_to_stage(
+            stage,
+            layout_plan=_stage_layout_plan(spec.get("layoutPlan"), id_to_index),
+            graph_intent=spec.get("graphIntent"),
+            strategy=layout,
+        )
     attachments = _load_attachments(spec.get("attachments", []))
     metadata = spec.get("metadata") or {"version": "2.2.0"}
     tags = spec.get("tags") or []
     references = spec.get("references") or {"sections": {}, "files": []}
     return stage, attachments, metadata, tags, references
+
+
+def _stage_layout_plan(layout_plan: Any, id_to_index: dict[str, int]) -> dict[str, Any] | None:
+    if not isinstance(layout_plan, dict):
+        return None
+
+    def translate(value: Any) -> Any:
+        if isinstance(value, str) and value in id_to_index:
+            return f"/{id_to_index[value]}"
+        if isinstance(value, list):
+            return [translate(item) for item in value]
+        if isinstance(value, dict):
+            return {key: translate(item) for key, item in value.items()}
+        return value
+
+    return translate(layout_plan)
 
 
 def inspect_document(document: PrgDocument, *, sample_limit: int = 20) -> dict[str, Any]:
