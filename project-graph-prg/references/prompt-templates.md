@@ -7,7 +7,9 @@ Assume the current working directory is the skill directory or the target projec
 Current CLI surface:
 
 - `prg_cli.py inspect`
+- `prg_cli.py classify`
 - `prg_cli.py generate`
+- `prg_cli.py layout`
 - `prg_cli.py edit`
 - `prg_cli.py validate`
 - `prg_cli.py validate-op`
@@ -27,23 +29,28 @@ Requirements:
 - <requirement 3>
 
 Workflow:
-1. Build a UTF-8 JSON spec.
-2. Generate the .prg with `prg_cli.py generate`.
-3. Run `prg_cli.py validate`.
-4. If the graph contains logic operators like #ADD# or #DIV#, run `prg_cli.py validate-op`.
-5. Read the structural and logic validation results.
-6. If needed, run `prg_cli.py fix-op-links` and re-run logic validation.
-7. Run `prg_cli.py overlap` last for geometry validation.
-8. If needed, run `prg_cli.py fix-layout` and re-run overlap validation.
-9. After overlap passes, run `prg_cli.py route-edge-crossings`.
+1. Classify graph type before extracting nodes and edges. Write `graphIntent` with `primaryType`, `confidence`, `evidence`, `extractionFocus`, and `fallbackType`.
+2. Use `graphIntent` to decide what entities, groups, and edge semantics to extract.
+3. Build a UTF-8 JSON spec with `layoutPlan`.
+4. Run `prg_cli.py classify spec.json` and compare script metrics with `graphIntent`.
+5. If `hasCycles`, `density`, `component_count`, or `root_count` contradicts `graphIntent`, update `graphIntent/layoutPlan` and re-run classify.
+6. Generate the .prg with `prg_cli.py generate` using the default `--layout auto`.
+7. Run `prg_cli.py validate`.
+8. If the graph contains logic operators like #ADD# or #DIV#, run `prg_cli.py validate-op`.
+9. Read the structural and logic validation results.
+10. If needed, run `prg_cli.py fix-op-links` and re-run logic validation.
+11. Run `prg_cli.py overlap` last for geometry validation.
+12. If needed, run `prg_cli.py fix-layout --min-gap 200` and re-run overlap validation.
+13. After overlap passes, run `prg_cli.py route-edge-crossings` only if the user wants ConnectPoint-based edge routing or `routingPlan.insertConnectPoints` is true.
 
 Constraints:
 - Keep all labels Unicode-safe.
+- Do not build objects first and infer layout later; `graphIntent` must guide extraction, grouping, edge semantics, and `layoutPlan`.
 - Do not leave any overlapping blocks, including containment overlap.
 - Default to `200px` edge-to-edge clearance. If the user requires a different clearance such as `300px around each unit`, run `prg_cli.py overlap --min-gap 300`.
 - Treat generated text-node size as derived from text content. Do not trust placeholder width and height from the initial draft spec.
 - Treat Section bounds as real geometry during the final overlap pass unless the user explicitly asks to exclude them.
-- After overlap passes, check whether any straight edge fully passes through a block and, if so, route it with `prg_cli.py route-edge-crossings`.
+- After overlap passes, check whether ConnectPoint insertion is enabled. If disabled, skip `prg_cli.py route-edge-crossings` and state that straight edge-through-block routing was intentionally not enforced.
 - The model must decide whether repair is safe before calling `prg_cli.py fix-op-links` or `prg_cli.py fix-layout`.
 - Return the generated `.prg` path and the validation command sequence.
 ```
@@ -59,15 +66,18 @@ Requirements:
 - Keep text content as Unicode
 
 Workflow:
-1. Reconstruct the graph structure into a UTF-8 JSON spec.
-2. Generate the .prg with `prg_cli.py generate`.
-3. Run `prg_cli.py validate`.
-4. If the graph contains logic operators like #ADD# or #DIV#, run `prg_cli.py validate-op`.
-5. Read the structural and logic validation results.
-6. If needed, run `prg_cli.py fix-op-links` and re-run logic validation.
-7. Run `prg_cli.py overlap` last for geometry validation.
-8. If needed, run `prg_cli.py fix-layout` and re-run overlap validation.
-9. After overlap passes, run `prg_cli.py route-edge-crossings`.
+1. Classify graph type before extracting nodes and edges. Write `graphIntent` with `primaryType`, `confidence`, `evidence`, `extractionFocus`, and `fallbackType`.
+2. Use `graphIntent` to reconstruct the graph structure into a UTF-8 JSON spec with `layoutPlan`.
+3. Run `prg_cli.py classify spec.json` and compare script metrics with `graphIntent`.
+4. If `hasCycles`, `density`, `component_count`, or `root_count` contradicts `graphIntent`, update `graphIntent/layoutPlan` and re-run classify.
+5. Generate the .prg with `prg_cli.py generate` using the default `--layout auto`.
+6. Run `prg_cli.py validate`.
+7. If the graph contains logic operators like #ADD# or #DIV#, run `prg_cli.py validate-op`.
+8. Read the structural and logic validation results.
+9. If needed, run `prg_cli.py fix-op-links` and re-run logic validation.
+10. Run `prg_cli.py overlap` last for geometry validation.
+11. If needed, run `prg_cli.py fix-layout --min-gap 200` and re-run overlap validation.
+12. After overlap passes, run `prg_cli.py route-edge-crossings` only if the user wants ConnectPoint-based edge routing or `routingPlan.insertConnectPoints` is true.
 
 State clearly that the result is a logical reconstruction, not a pixel-perfect import.
 The model must decide whether repair is safe before calling `prg_cli.py fix-op-links` or `prg_cli.py fix-layout`.
@@ -92,7 +102,7 @@ Workflow:
 7. If needed, run `prg_cli.py fix-op-links` and re-run logic validation.
 8. Run `prg_cli.py overlap` last for geometry validation.
 9. If needed, run `prg_cli.py fix-layout` and re-run overlap validation.
-10. After overlap passes, run `prg_cli.py route-edge-crossings`.
+10. After overlap passes, run `prg_cli.py route-edge-crossings` only if the user wants ConnectPoint-based edge routing.
 
 Decision rule:
 - Do not call repair commands automatically just because validation failed.
@@ -120,7 +130,7 @@ Workflow:
 7. Only if needed and safe, run `prg_cli.py fix-op-links` and re-run logic validation.
 8. Run `prg_cli.py overlap` last for geometry validation.
 9. Only if needed and safe, run `prg_cli.py fix-layout` and re-run overlap validation.
-10. After overlap passes, run `prg_cli.py route-edge-crossings`.
+10. After overlap passes, run `prg_cli.py route-edge-crossings` only if the user wants ConnectPoint-based edge routing.
 
 Constraints:
 - Prefer local semantic edits over full regeneration when the user wants to preserve the existing graph.
@@ -149,14 +159,15 @@ Return:
 Use $project-graph-prg for this task.
 
 Follow this workflow exactly:
-1. Inspect or build the UTF-8 JSON/spec input first.
-2. Use `prg_cli.py` subcommands, not ad hoc manual archive edits.
-3. For edits, prefer a UTF-8 edit patch and `prg_cli.py edit` before considering regeneration.
-4. Run structural validation before logic validation.
-5. Run logic validation before overlap validation.
-6. Keep overlap checking near the end, after structure and logic are stable.
-7. After overlap passes, check and route any edge-through-block crossings.
-8. Never auto-repair blindly. Read validation output first and decide whether repair is safe.
-9. If repair would risk changing semantics, adjust the patch/spec and retry instead.
-10. Return the final command sequence you ran, the validation status, and the output `.prg` path.
+1. For generation, classify graph type before extracting nodes and edges, then build `graphIntent`, typed extraction, `layoutPlan`, and `objects` in that order.
+2. Run `prg_cli.py classify` on generated specs and reconcile metric conflicts before generation.
+3. Use `prg_cli.py` subcommands, not ad hoc manual archive edits.
+4. For edits, prefer a UTF-8 edit patch and `prg_cli.py edit` before considering regeneration.
+5. Run structural validation before logic validation.
+6. Run logic validation before overlap validation.
+7. Keep overlap checking near the end, after structure and logic are stable.
+8. After overlap passes, check whether ConnectPoint insertion is enabled before routing edge-through-block crossings.
+9. Never auto-repair blindly. Read validation output first and decide whether repair is safe.
+10. If repair would risk changing semantics, adjust the patch/spec and retry instead.
+11. Return the final command sequence you ran, the validation status, and the output `.prg` path.
 ```

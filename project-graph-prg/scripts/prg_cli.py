@@ -5,8 +5,8 @@ import json
 from pathlib import Path
 
 import geometry_prg_tools as geom
+import graph_layout
 from prg_tools import (
-    auto_fix_layout,
     auto_fix_operation_block_links,
     edit_document,
     inspect_document,
@@ -33,7 +33,7 @@ def cmd_inspect(args: argparse.Namespace) -> int:
 
 def cmd_generate(args: argparse.Namespace) -> int:
     spec = json.loads(args.spec.read_text(encoding="utf-8"))
-    stage, attachments, metadata, tags, references = geom.generate_prg_from_spec(spec)
+    stage, attachments, metadata, tags, references = geom.generate_prg_from_spec(spec, layout=args.layout)
     write_prg(
         args.output,
         stage=stage,
@@ -50,6 +50,12 @@ def cmd_generate(args: argparse.Namespace) -> int:
         },
         args.indent,
     )
+    return 0
+
+
+def cmd_classify(args: argparse.Namespace) -> int:
+    spec = json.loads(args.spec.read_text(encoding="utf-8"))
+    print_json(graph_layout.classify_spec(spec), args.indent)
     return 0
 
 
@@ -80,16 +86,61 @@ def cmd_validate_op(args: argparse.Namespace) -> int:
 
 
 def cmd_fix_layout(args: argparse.Namespace) -> int:
-    document = read_prg(args.input)
-    result = auto_fix_layout(
+    document = geom.read_prg(args.input)
+    before = geom.find_overlaps(
         document,
         include_sections=args.include_sections,
         include_points=args.include_points,
         min_overlap_area=args.min_area,
-        padding=args.padding,
-        max_iterations=args.max_iterations,
+        min_gap=args.min_gap,
+    )
+    layout = graph_layout.apply_layout_to_stage(
+        document.stage,
+        strategy=args.strategy,
+        direction=args.direction,
+        min_gap=args.min_gap,
+        seed=args.seed,
+    )
+    after = geom.find_overlaps(
+        document,
+        include_sections=args.include_sections,
+        include_points=args.include_points,
+        min_overlap_area=args.min_area,
+        min_gap=args.min_gap,
     )
     output_path = (args.output or args.input).resolve()
+    write_prg(
+        output_path,
+        stage=document.stage,
+        metadata=document.metadata,
+        tags=document.tags,
+        references=document.references,
+        attachments=document.attachments,
+    )
+    print_json(
+        {
+            "input": str(args.input.resolve()),
+            "output": str(output_path),
+            "before": before,
+            "layout": layout,
+            "after": after,
+            "ok": after["ok"],
+        },
+        args.indent,
+    )
+    return 0 if after["ok"] else 1
+
+
+def cmd_layout(args: argparse.Namespace) -> int:
+    document = geom.read_prg(args.input)
+    result = graph_layout.apply_layout_to_stage(
+        document.stage,
+        strategy=args.strategy,
+        direction=args.direction,
+        min_gap=args.min_gap,
+        seed=args.seed,
+    )
+    output_path = args.output.resolve()
     write_prg(
         output_path,
         stage=document.stage,
@@ -106,7 +157,7 @@ def cmd_fix_layout(args: argparse.Namespace) -> int:
         },
         args.indent,
     )
-    return 0 if result["ok"] else 1
+    return 0 if result.get("geometry", {}).get("ok", True) else 1
 
 
 def cmd_fix_op_links(args: argparse.Namespace) -> int:
@@ -208,8 +259,29 @@ def build_parser() -> argparse.ArgumentParser:
     generate_parser = subparsers.add_parser("generate", help="Generate a .prg file from a JSON spec")
     generate_parser.add_argument("spec", type=Path, help="Path to the intermediate JSON spec")
     generate_parser.add_argument("output", type=Path, help="Path to the output .prg file")
+    generate_parser.add_argument(
+        "--layout",
+        default="auto",
+        choices=["auto", "off", *sorted(graph_layout.STRATEGIES)],
+        help="Apply native layout before writing the .prg; use off to preserve input coordinates",
+    )
     add_common_indent_argument(generate_parser)
     generate_parser.set_defaults(func=cmd_generate)
+
+    classify_parser = subparsers.add_parser("classify", help="Classify a JSON spec and recommend graphIntent/layoutPlan")
+    classify_parser.add_argument("spec", type=Path, help="Path to the intermediate JSON spec")
+    add_common_indent_argument(classify_parser)
+    classify_parser.set_defaults(func=cmd_classify)
+
+    layout_parser = subparsers.add_parser("layout", help="Re-layout an existing .prg file with native coordinates")
+    layout_parser.add_argument("input", type=Path, help="Path to the input .prg file")
+    layout_parser.add_argument("output", type=Path, help="Path to the output .prg file")
+    layout_parser.add_argument("--strategy", default="auto", choices=["auto", *sorted(graph_layout.STRATEGIES)], help="Layout strategy")
+    layout_parser.add_argument("--direction", default="right", choices=sorted(graph_layout.DIRECTIONS), help="Main layout direction")
+    layout_parser.add_argument("--min-gap", type=float, default=geom.DEFAULT_MIN_GAP, help="Minimum required edge-to-edge spacing between blocks")
+    layout_parser.add_argument("--seed", type=int, default=7, help="Deterministic seed for force-like strategies")
+    add_common_indent_argument(layout_parser)
+    layout_parser.set_defaults(func=cmd_layout)
 
     edit_parser = subparsers.add_parser("edit", help="Edit an existing .prg file using a JSON patch")
     edit_parser.add_argument("input", type=Path, help="Path to the input .prg file")
@@ -248,6 +320,10 @@ def build_parser() -> argparse.ArgumentParser:
     fix_layout_parser.add_argument("--include-points", action="store_true", help="Include ConnectPoint objects in overlap checks")
     fix_layout_parser.add_argument("--include-sections", action="store_true", help="Include Section bounds in overlap checks")
     fix_layout_parser.add_argument("--min-area", type=float, default=1.0, help="Minimum overlap area to resolve")
+    fix_layout_parser.add_argument("--min-gap", type=float, default=geom.DEFAULT_MIN_GAP, help="Minimum required edge-to-edge spacing between blocks")
+    fix_layout_parser.add_argument("--strategy", default="auto", choices=["auto", *sorted(graph_layout.STRATEGIES)], help="Layout strategy used when reflowing")
+    fix_layout_parser.add_argument("--direction", default="right", choices=sorted(graph_layout.DIRECTIONS), help="Main layout direction")
+    fix_layout_parser.add_argument("--seed", type=int, default=7, help="Deterministic seed for force-like strategies")
     fix_layout_parser.add_argument("--padding", type=float, default=24.0, help="Extra spacing added when separating objects")
     fix_layout_parser.add_argument("--max-iterations", type=int, default=50, help="Maximum fix iterations")
     add_common_indent_argument(fix_layout_parser)
