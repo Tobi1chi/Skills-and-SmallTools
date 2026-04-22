@@ -17,6 +17,9 @@ This repository contains small public-facing Codex skills.
   clean or a real route choice requires user input.
 - `profile-writing-style`
   Analyze writing samples and generate a reusable Markdown style profile.
+- `ssh-control`
+  Run SSH commands, persistent shell sessions, and SFTP transfers with `uv` and
+  `paramiko`.
 
 ## Structure
 
