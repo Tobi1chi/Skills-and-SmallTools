@@ -1,0 +1,4 @@
+interface:
+  display_name: "SSH Control"
+  short_description: "Run SSH commands, persistent shell sessions, and SFTP transfers"
+  default_prompt: "Use $ssh-control to connect to a remote host over SSH, run commands, or manage a persistent shell session."
