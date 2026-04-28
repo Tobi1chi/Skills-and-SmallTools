@@ -1,0 +1,115 @@
+{
+  "version": "1.0.0",
+  "nets": [
+    {
+      "name": "GND",
+      "pins": [
+        { "component": "U1", "pin": "7" },
+        { "component": "C1", "pin": "2" },
+        { "component": "C2", "pin": "2" },
+        { "component": "R2", "pin": "2" },
+        { "component": "J1", "pin": "1" }
+      ]
+    },
+    {
+      "name": "VCC",
+      "pins": [
+        { "component": "U1", "pin": "14" },
+        { "component": "C1", "pin": "1" },
+        { "component": "R1", "pin": "1" }
+      ]
+    },
+    {
+      "name": "NET_U1_OUT",
+      "pins": [
+        { "component": "U1", "pin": "3" },
+        { "component": "R1", "pin": "2" },
+        { "component": "R2", "pin": "1" }
+      ]
+    },
+    {
+      "name": "SDA",
+      "pins": [
+        { "component": "U1", "pin": "5" },
+        { "component": "J1", "pin": "2" }
+      ]
+    },
+    {
+      "name": "SCL",
+      "pins": [
+        { "component": "U1", "pin": "6" },
+        { "component": "J1", "pin": "3" }
+      ]
+    },
+    {
+      "name": "C2_NET",
+      "pins": [
+        { "component": "C2", "pin": "1" },
+        { "component": "U1", "pin": "1" }
+      ]
+    }
+  ],
+  "components": [
+    {
+      "designator": "U1",
+      "name": "STM32F103C8T6",
+      "footprint": "LQFP-48_7x7mm_P0.5mm",
+      "value": "STM32F103C8T6",
+      "attributes": {
+        "Manufacturer": "STMicroelectronics",
+        "LCSC": "C8734",
+        "Description": "32-bit ARM Cortex-M3 MCU"
+      }
+    },
+    {
+      "designator": "C1",
+      "name": "Cap",
+      "footprint": "C0402",
+      "value": "100nF",
+      "attributes": {
+        "Manufacturer": "SAMSUNG",
+        "LCSC": "C307331",
+        "Description": "100nF Decoupling Cap"
+      }
+    },
+    {
+      "designator": "C2",
+      "name": "Cap",
+      "footprint": "C0402",
+      "value": "10uF",
+      "attributes": {
+        "LCSC": "C19702",
+        "Description": "10uF Filter Cap"
+      }
+    },
+    {
+      "designator": "R1",
+      "name": "Res",
+      "footprint": "R0402",
+      "value": "10k",
+      "attributes": {
+        "LCSC": "C25744",
+        "Description": "10k Pull-up Resistor"
+      }
+    },
+    {
+      "designator": "R2",
+      "name": "Res",
+      "footprint": "R0402",
+      "value": "4.7k",
+      "attributes": {
+        "LCSC": "C25900",
+        "Description": "4.7k Pull-down Resistor"
+      }
+    },
+    {
+      "designator": "J1",
+      "name": "Conn_01x03",
+      "footprint": "PinHeader_1x03_P2.54mm_Vertical",
+      "value": "I2C_Connector",
+      "attributes": {
+        "Description": "3-pin I2C connector"
+      }
+    }
+  ]
+}

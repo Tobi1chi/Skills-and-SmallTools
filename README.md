@@ -26,6 +26,12 @@ This repository contains small public-facing Codex skills.
 - `codex-new-machine-setup`
   Structured macOS/Windows bootstrap guide for configuring a new computer for
   daily Codex work.
+- `circuit-region-language`
+  Create, review, and convert human-readable CDL circuit descriptions for
+  schematic design workflows.
+- `jlceda-enet-parser`
+  Parse JLCEDA Pro / EasyEDA Pro `.enet` netlists into component, BOM, network,
+  power, and connectivity summaries.
 
 ## Structure
 
