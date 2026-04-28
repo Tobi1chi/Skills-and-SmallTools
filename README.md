@@ -23,6 +23,9 @@ This repository contains small public-facing Codex skills.
 - `keats-course-downloader`
   Download KEATS/Moodle course materials into section folders using either a
   cookie file or a Playwright auth-state JSON captured after SSO/MFA login.
+- `codex-new-machine-setup`
+  Structured macOS/Windows bootstrap guide for configuring a new computer for
+  daily Codex work.
 
 ## Structure
 
