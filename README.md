@@ -20,6 +20,9 @@ This repository contains small public-facing Codex skills.
 - `ssh-control`
   Run SSH commands, persistent shell sessions, and SFTP transfers with `uv` and
   `paramiko`.
+- `keats-course-downloader`
+  Download KEATS/Moodle course materials into section folders using either a
+  cookie file or a Playwright auth-state JSON captured after SSO/MFA login.
 
 ## Structure
 
