@@ -1,0 +1,4 @@
+interface:
+  display_name: "KEATS Downloader"
+  short_description: "Download a KEATS course from URL plus cookies or auth state."
+  default_prompt: "Use $keats-course-downloader to download a KEATS course from a course URL and either a cookie file or Playwright auth-state JSON into section-based folders."
