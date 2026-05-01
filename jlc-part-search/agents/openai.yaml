@@ -1,0 +1,4 @@
+interface:
+  display_name: "JLC Part Search"
+  short_description: "Search JLC/LCSC parts, then fetch exact details and ENET fields"
+  default_prompt: "Use the mandatory two-stage workflow: filter catalog candidates from requirements, then fetch details or ENET-compatible fields only for one explicit LCSC number or exact MPN."
