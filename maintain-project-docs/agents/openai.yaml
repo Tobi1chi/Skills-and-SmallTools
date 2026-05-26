@@ -1,0 +1,4 @@
+interface:
+  display_name: "Maintain Project Docs"
+  short_description: "Keep project docs updated from useful context"
+  default_prompt: "Use $maintain-project-docs to preserve useful conversation context in the current project documentation."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Generate Project Memory"
+  short_description: "Create durable memory files for projects"
+  default_prompt: "Use $generate-project-memory to create or update a concise memory file for the current project."
