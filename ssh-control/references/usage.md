@@ -85,6 +85,29 @@ uv run --with paramiko python scripts/interactive_shell.py \
   --steps '["cd /var/www/myapp", "pwd", "git status --short"]'
 ```
 
+`interactive_shell.py` keeps shell state across steps and detects completion
+with a unique sentinel instead of the remote prompt. Its JSON result shape is:
+
+```json
+{
+  "command": "pwd",
+  "stdout": "/var/www/myapp\n",
+  "stderr": "",
+  "exit_code": 0
+}
+```
+
+Because it uses an interactive PTY, stderr is merged into stdout and the
+`stderr` field is kept as an empty compatibility field. The script preserves
+ordinary `$`, `#`, `%`, leading/trailing blank lines, trailing spaces, ANSI
+control sequences, and CR/LF output where the terminal allows it. It also
+disables `errexit` around each wrapped step so that a prior `set -e` does not
+prevent the sentinel from being printed.
+
+Avoid using it for full-screen or strongly interactive programs such as `vim`,
+`less`, `top`, password prompts, or installers that wait for input; those should
+timeout and stop subsequent steps, or use a purpose-built interactive flow.
+
 Upload a file:
 
 ```sh

@@ -76,9 +76,14 @@ service is not running:
 | Intent | Script |
 |--------|--------|
 | Run one or more independent commands | `scripts/run_command.py` |
-| Run multiple commands in one temporary shell | `scripts/interactive_shell.py` |
+| Run multiple commands in one temporary stateful shell | `scripts/interactive_shell.py` |
 | Upload files or directories | `scripts/sftp_upload.py` |
 | Download files or directories | `scripts/sftp_download.py` |
+
+`scripts/interactive_shell.py` uses unique sentinels to detect command
+completion instead of relying on the remote prompt. Prefer it over
+`run_command.py` when command state should persist across steps but the
+persistent HTTP service is unnecessary.
 
 ## Safety Rules
 
