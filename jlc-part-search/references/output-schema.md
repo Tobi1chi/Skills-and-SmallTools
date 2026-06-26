@@ -26,6 +26,10 @@ Candidate fields:
 - `package`
 - `summary`
 - `stock`
+- `price_currency`
+- `price_tiers`
+- `min_order_qty`
+- `unit`
 - `library_type`
 - `product_url`
 - `datasheet_pdf`
@@ -39,6 +43,14 @@ Candidate fields:
 
 `detail` returns facts for one explicit identifier. If an exact MPN maps to multiple LCSC numbers, return `ambiguous_identifier` and candidates instead of choosing.
 
+When exposed by the source catalog, `detail` includes the same RMB/CNY price fields:
+
+- `price_currency`
+- `price_tiers`
+- `min_order_qty`
+- `unit`
+- `price_note`
+
 ## Stage 2: enet
 
 `enet` may emit ENET-compatible fields for one explicit unique part:
@@ -51,3 +63,29 @@ Candidate fields:
 - `footprintUuid`
 
 It must not modify files.
+
+## Stage 2: datasheet
+
+`datasheet` downloads the datasheet PDF for one explicit unique part. It must not choose from broad candidates.
+
+Statuses:
+
+- `downloaded`
+- `exists`
+- `no_datasheet`
+- `no_catalog_match`
+- `ambiguous_identifier`
+- `invalid_datasheet_url`
+- `download_failed`
+- `not_pdf`
+
+Successful or already-existing outputs include:
+
+- `stage`
+- `status`
+- `identifier`
+- `selected`
+- `datasheet_pdf`
+- `file_path`
+- `bytes` when downloaded
+- `file_write_note` when downloaded

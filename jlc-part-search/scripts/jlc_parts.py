@@ -98,6 +98,26 @@ def http_text(url: str, headers: dict[str, str] | None = None, timeout: int = 25
         return {"_error": str(exc), "_url": url}
 
 
+def http_bytes(url: str, headers: dict[str, str] | None = None, timeout: int = 45) -> dict[str, Any]:
+    req_headers = {
+        "Accept": "application/pdf,*/*;q=0.8",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.7",
+        "User-Agent": "jlc-part-search/1.0",
+    }
+    if headers:
+        req_headers.update(headers)
+    req = urllib.request.Request(url, headers=req_headers, method="GET")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return {
+                "content": resp.read(),
+                "content_type": resp.headers.get("Content-Type", ""),
+                "final_url": resp.geturl(),
+            }
+    except (urllib.error.URLError, TimeoutError) as exc:
+        return {"_error": str(exc), "_url": url}
+
+
 def first_file_url(groups: Any, file_type: str) -> str:
     if not isinstance(groups, list):
         return ""
@@ -114,6 +134,76 @@ def first_file_url(groups: Any, file_type: str) -> str:
             if url:
                 return "https://atta.szlcsc.com" + url if url.startswith("/") else url
     return ""
+
+
+def safe_filename(value: str, fallback: str = "datasheet") -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", value.strip())
+    cleaned = re.sub(r"_+", "_", cleaned).strip("._-")
+    return cleaned or fallback
+
+
+def numeric_or_none(value: Any) -> int | float | None:
+    if value in ("", None):
+        return None
+    if isinstance(value, (int, float)):
+        return value
+    try:
+        number = float(str(value).strip())
+    except ValueError:
+        return None
+    return int(number) if number.is_integer() else number
+
+
+def normalize_qty(value: Any) -> int | None:
+    number = numeric_or_none(value)
+    if number in (None, -1):
+        return None
+    return int(number)
+
+
+def format_price_tiers(price_list: Any, currency: str) -> list[dict[str, Any]]:
+    if not isinstance(price_list, list):
+        return []
+    tiers: list[dict[str, Any]] = []
+    for row in price_list:
+        if not isinstance(row, dict):
+            continue
+        unit_price = numeric_or_none(row.get("productPrice") or row.get("thePrice") or row.get("price") or row.get("unitPrice"))
+        if unit_price is None:
+            continue
+        tiers.append(
+            {
+                "min_qty": normalize_qty(row.get("startPurchasedNumber") or row.get("spNumber") or row.get("minQty")),
+                "max_qty": normalize_qty(row.get("endPurchasedNumber") or row.get("epNumber") or row.get("maxQty")),
+                "unit_price": unit_price,
+                "currency": currency,
+            }
+        )
+    return tiers
+
+
+def extract_price_info(raw: dict[str, Any], currency: str) -> dict[str, Any]:
+    product = raw.get("productVO") if isinstance(raw.get("productVO"), dict) else raw
+    price_list = (
+        product.get("productPriceList")
+        or product.get("priceList")
+        or product.get("ladderPriceList")
+        or raw.get("productPriceList")
+        or raw.get("priceList")
+        or raw.get("ladderPriceList")
+    )
+    tiers = format_price_tiers(price_list, currency)
+    min_order_qty = normalize_qty(product.get("minBuyNumber") or raw.get("minBuyNumber"))
+    unit = product.get("productUnit") or product.get("venditionUnit") or raw.get("productUnit") or raw.get("venditionUnit") or ""
+    info: dict[str, Any] = {
+        "price_currency": currency if tiers else "",
+        "price_tiers": tiers,
+        "min_order_qty": min_order_qty,
+        "unit": unit,
+    }
+    if tiers:
+        info["price_note"] = f"{currency} tier prices from the source catalog; verify at purchase time."
+    return info
 
 
 def parse_next_data(text: str) -> dict[str, Any]:
@@ -140,7 +230,7 @@ def canonicalize_product(raw: dict[str, Any], source: str) -> dict[str, Any]:
                 params[name] = value
             if not package and name.lower() in {"package", "封装"}:
                 package = value
-    return {
+    item = {
         "source": source,
         "lcsc": raw.get("componentCode") or raw.get("lcsc_part_number") or raw.get("productNumber") or raw.get("product_number") or "",
         "mpn": raw.get("componentModelEn") or raw.get("componentModel") or raw.get("productModel") or raw.get("mpn") or "",
@@ -154,6 +244,11 @@ def canonicalize_product(raw: dict[str, Any], source: str) -> dict[str, Any]:
         "category": raw.get("category") or raw.get("firstSortName") or "",
         "parameters": params,
     }
+    if source == "lcsc-official":
+        item.update(extract_price_info(raw, os.environ.get("LCSC_API_CURRENCY", "CNY")))
+    else:
+        item.update({"price_currency": "", "price_tiers": [], "min_order_qty": None, "unit": raw.get("unit") or ""})
+    return item
 
 
 def canonicalize_szlcsc_product(record: dict[str, Any]) -> dict[str, Any]:
@@ -166,7 +261,7 @@ def canonicalize_szlcsc_product(record: dict[str, Any]) -> dict[str, Any]:
     stock = product.get("stockNumber")
     if stock in (None, ""):
         stock = record.get("totalStockNumber")
-    return {
+    item = {
         "source": "szlcsc-public",
         "lcsc": product.get("productCode") or "",
         "mpn": product.get("productModel") or "",
@@ -181,6 +276,8 @@ def canonicalize_szlcsc_product(record: dict[str, Any]) -> dict[str, Any]:
         "category": product.get("productType") or record.get("lightCatalogName") or "",
         "parameters": param_map,
     }
+    item.update(extract_price_info(record, "CNY"))
+    return item
 
 
 def search_szlcsc(query: str, page_size: int = 20) -> list[dict[str, Any]]:
@@ -280,6 +377,11 @@ def collect_candidates(query: str, page_size: int, source: str) -> list[dict[str
         return search_jlcpcb(query, page_size)
     if source == "lcsc":
         return search_lcsc_official(query, page_size)
+    if source == "domestic":
+        results = search_szlcsc(query, page_size=page_size)
+        if not usable_candidates(results):
+            results.extend(search_lcsc_official(query, page_size=page_size))
+        return dedupe_candidates(results)[:page_size]
     if source == "auto":
         results = search_szlcsc(query, page_size=page_size)
         if not usable_candidates(results):
@@ -438,6 +540,10 @@ def format_filter_candidate(rank: int, item: dict[str, Any]) -> dict[str, Any]:
         "package": item.get("package", ""),
         "summary": item.get("description", ""),
         "stock": item.get("stock", ""),
+        "price_currency": item.get("price_currency", ""),
+        "price_tiers": item.get("price_tiers", []),
+        "min_order_qty": item.get("min_order_qty"),
+        "unit": item.get("unit", ""),
         "library_type": item.get("library_type", ""),
         "product_url": item.get("product_url", ""),
         "datasheet_pdf": item.get("datasheet_pdf", ""),
@@ -484,6 +590,27 @@ def detail_payload(identifier: str, source: str, limit: int, include_enet: bool)
     return format_detail(part, easyeda)
 
 
+def exact_part_payload(identifier: str, source: str, limit: int, stage: str) -> dict[str, Any] | dict[str, Any]:
+    matches = exact_identifier_matches(identifier, source, limit)
+    if not matches:
+        return {
+            "stage": stage,
+            "status": "no_catalog_match",
+            "identifier": identifier,
+            "availability_note": "No exact catalog match was found. This is not proof that the design requirement is impossible.",
+        }
+    deduped = dedupe_candidates(matches)
+    if len(deduped) > 1:
+        return {
+            "stage": stage,
+            "status": "ambiguous_identifier",
+            "identifier": identifier,
+            "candidates": [format_filter_candidate(idx + 1, {**item, "score": 0.0}) for idx, item in enumerate(deduped[:limit])],
+            "next_required_action": "choose_one_lcsc_code",
+        }
+    return deduped[0]
+
+
 def format_detail(part: dict[str, Any], easyeda: dict[str, Any]) -> dict[str, Any]:
     return {
         "stage": "detail",
@@ -495,6 +622,11 @@ def format_detail(part: dict[str, Any], easyeda: dict[str, Any]) -> dict[str, An
         "description": part.get("description", ""),
         "category": part.get("category", ""),
         "stock": part.get("stock", ""),
+        "price_currency": part.get("price_currency", ""),
+        "price_tiers": part.get("price_tiers", []),
+        "min_order_qty": part.get("min_order_qty"),
+        "unit": part.get("unit", ""),
+        "price_note": part.get("price_note", ""),
         "library_type": part.get("library_type", ""),
         "datasheet_pdf": part.get("datasheet_pdf", ""),
         "product_url": part.get("product_url", ""),
@@ -544,6 +676,103 @@ def format_enet_detail(part: dict[str, Any], easyeda: dict[str, Any]) -> dict[st
     }
 
 
+def datasheet_filename(part: dict[str, Any], url: str) -> str:
+    lcsc = safe_filename(str(part.get("lcsc") or ""))
+    mpn = safe_filename(str(part.get("mpn") or ""))
+    stem = safe_filename("_".join(piece for piece in (lcsc, mpn, "datasheet") if piece), "datasheet")
+    path_name = os.path.basename(urllib.parse.urlparse(url).path)
+    _, ext = os.path.splitext(path_name)
+    if not ext or len(ext) > 8:
+        ext = ".pdf"
+    if ext.lower() != ".pdf":
+        ext = ".pdf"
+    return f"{stem}{ext}"
+
+
+def download_datasheet_payload(identifier: str, source: str, limit: int, output_dir: str, overwrite: bool) -> dict[str, Any]:
+    part_or_status = exact_part_payload(identifier, source, limit, "datasheet")
+    if part_or_status.get("stage") == "datasheet":
+        return part_or_status
+    part = part_or_status
+    url = str(part.get("datasheet_pdf") or "").strip()
+    selected = {
+        "lcsc": part.get("lcsc", ""),
+        "mpn": part.get("mpn", ""),
+        "manufacturer": part.get("manufacturer", ""),
+        "package": part.get("package", ""),
+    }
+    if not url:
+        return {
+            "stage": "datasheet",
+            "status": "no_datasheet",
+            "identifier": identifier,
+            "selected": selected,
+            "product_url": part.get("product_url", ""),
+            "note": "The exact catalog match did not expose a datasheet PDF URL.",
+        }
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in {"http", "https"}:
+        return {
+            "stage": "datasheet",
+            "status": "invalid_datasheet_url",
+            "identifier": identifier,
+            "selected": selected,
+            "datasheet_pdf": url,
+        }
+    target_dir = os.path.abspath(os.path.expanduser(output_dir))
+    filename = datasheet_filename(part, url)
+    file_path = os.path.join(target_dir, filename)
+    if os.path.exists(file_path) and not overwrite:
+        return {
+            "stage": "datasheet",
+            "status": "exists",
+            "identifier": identifier,
+            "selected": selected,
+            "datasheet_pdf": url,
+            "file_path": file_path,
+            "overwrite_note": "Pass --overwrite to download again.",
+        }
+    result = http_bytes(url)
+    if result.get("_error"):
+        return {
+            "stage": "datasheet",
+            "status": "download_failed",
+            "identifier": identifier,
+            "selected": selected,
+            "datasheet_pdf": url,
+            "error": result.get("_error", ""),
+        }
+    content = result.get("content") or b""
+    if not isinstance(content, bytes) or not content.startswith(b"%PDF-"):
+        return {
+            "stage": "datasheet",
+            "status": "not_pdf",
+            "identifier": identifier,
+            "selected": selected,
+            "datasheet_pdf": url,
+            "content_type": result.get("content_type", ""),
+            "bytes": len(content) if isinstance(content, bytes) else 0,
+            "note": "The response did not look like a PDF; no file was written.",
+        }
+    os.makedirs(target_dir, exist_ok=True)
+    tmp_path = f"{file_path}.tmp"
+    with open(tmp_path, "wb") as handle:
+        handle.write(content)
+    os.replace(tmp_path, file_path)
+    return {
+        "stage": "datasheet",
+        "status": "downloaded",
+        "identifier": identifier,
+        "selected": selected,
+        "datasheet_pdf": url,
+        "final_url": result.get("final_url", url),
+        "content_type": result.get("content_type", ""),
+        "file_path": file_path,
+        "bytes": len(content),
+        "file_write_note": "Only the datasheet PDF was downloaded; no catalog or .enet files were modified.",
+    }
+
+
 def command_filter(args: argparse.Namespace) -> None:
     candidates = collect_candidates(args.query, page_size=max(args.limit * 2, args.limit), source=args.source)
     print_json(filter_output(args.query, candidates, args.limit))
@@ -551,6 +780,10 @@ def command_filter(args: argparse.Namespace) -> None:
 
 def command_detail(args: argparse.Namespace, include_enet: bool = False) -> None:
     print_json(detail_payload(args.identifier, args.source, args.limit, include_enet=include_enet))
+
+
+def command_datasheet(args: argparse.Namespace) -> None:
+    print_json(download_datasheet_payload(args.identifier, args.source, args.limit, args.output_dir, args.overwrite))
 
 
 def print_json(payload: dict[str, Any]) -> None:
@@ -568,6 +801,20 @@ def self_test() -> None:
             "encapsulationModel": "0402",
             "stockNumber": 1000,
             "smtLabel": "基础库",
+            "minBuyNumber": 1,
+            "productUnit": "个",
+            "productPriceList": [
+                {
+                    "startPurchasedNumber": 1,
+                    "endPurchasedNumber": 99,
+                    "productPrice": 0.0123,
+                },
+                {
+                    "startPurchasedNumber": 100,
+                    "endPurchasedNumber": -1,
+                    "productPrice": 0.01,
+                },
+            ],
         },
         "paramLinkedMap": {"Resistance": "10k", "Tolerance": "1%"},
     }
@@ -576,9 +823,13 @@ def self_test() -> None:
     assert payload["stage"] == "filter"
     assert "selected" not in payload
     assert "enet_fields" not in payload
+    assert payload["candidates"][0]["price_currency"] == "CNY"
+    assert payload["candidates"][0]["price_tiers"][0]["unit_price"] == 0.0123
     detail = format_detail(part, {"symbol_uuid": "sym", "footprint_uuid": "pkg", "footprint_name": "R0402"})
     assert detail["stage"] == "detail"
     assert "enet_fields" not in detail
+    assert detail["price_currency"] == "CNY"
+    assert datasheet_filename(part | {"lcsc": "C25804", "mpn": "RC0402FR-0710KL"}, "https://example.com/a.pdf") == "C25804_RC0402FR-0710KL_datasheet.pdf"
     enet = format_enet_detail(part, {"symbol_uuid": "sym", "footprint_uuid": "pkg", "footprint_name": "R0402"})
     assert enet["stage"] == "enet"
     assert enet["enet_fields"]["LCSC"] == "C25804"
@@ -593,17 +844,24 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("filter", help="Stage 1: return catalog candidates for broad requirements")
     p.add_argument("query")
     p.add_argument("--limit", type=int, default=10)
-    p.add_argument("--source", choices=["auto", "szlcsc", "jlcpcb", "lcsc"], default="auto")
+    p.add_argument("--source", choices=["domestic", "auto", "szlcsc", "jlcpcb", "lcsc"], default="domestic")
 
     p = sub.add_parser("detail", help="Stage 2: return facts for one explicit LCSC code or exact MPN")
     p.add_argument("identifier")
     p.add_argument("--limit", type=int, default=10)
-    p.add_argument("--source", choices=["auto", "szlcsc", "jlcpcb", "lcsc"], default="auto")
+    p.add_argument("--source", choices=["domestic", "auto", "szlcsc", "jlcpcb", "lcsc"], default="domestic")
 
     p = sub.add_parser("enet", help="Stage 2: return ENET-compatible fields for one explicit part")
     p.add_argument("identifier")
     p.add_argument("--limit", type=int, default=10)
-    p.add_argument("--source", choices=["auto", "szlcsc", "jlcpcb", "lcsc"], default="auto")
+    p.add_argument("--source", choices=["domestic", "auto", "szlcsc", "jlcpcb", "lcsc"], default="domestic")
+
+    p = sub.add_parser("datasheet", help="Stage 2: download the datasheet PDF for one explicit part")
+    p.add_argument("identifier")
+    p.add_argument("--limit", type=int, default=10)
+    p.add_argument("--source", choices=["domestic", "auto", "szlcsc", "jlcpcb", "lcsc"], default="domestic")
+    p.add_argument("--output-dir", default="datasheets")
+    p.add_argument("--overwrite", action="store_true")
 
     sub.add_parser("self-test", help="Run offline output-contract tests")
     return parser
@@ -617,6 +875,8 @@ def main(argv: list[str] | None = None) -> None:
         command_detail(args, include_enet=False)
     elif args.command == "enet":
         command_detail(args, include_enet=True)
+    elif args.command == "datasheet":
+        command_datasheet(args)
     elif args.command == "self-test":
         self_test()
 
