@@ -23,10 +23,19 @@ description.
    - Declare components with known values or mark unknowns with `// CHECK`.
    - Write connections using `~~`, `-->`, and `==` from `cdl-spec.md`.
    - Add parameters and special annotations only when they describe known facts.
-4. Track unresolved choices:
+4. Generate or update the synchronized CSV BOM:
+   - Include one row for every CDL component declaration.
+   - Do not merge multiple RefDes values into one row.
+   - Preserve each CDL `RefDes`, `PartValue`, `Package`, and note verbatim
+     where possible.
+   - Use fields such as `Populate`, `Variant`, `Status`, or `Notes` for
+     `DNP`/`OPT`/`TP` annotations instead of dropping the component.
+   - Leave unknown supplier, price, LCSC, footprint, or procurement fields blank
+     or `TBD`; do not invent sourcing data.
+5. Track unresolved choices:
    - Do not invent topology, values, pin names, part numbers, or module details.
    - Add a final open-questions list for every `// CHECK`.
-5. Validate with `review-checklists.md` before finalizing.
+6. Validate with `review-checklists.md` before finalizing.
 
 ## Mode B — Existing Schematic Or Description To CDL
 
@@ -42,7 +51,9 @@ description and wants CDL output.
      strongly implied by source context.
    - Power and reference rails use `==`.
 5. Mark unreadable or uncertain information with `// CHECK`.
-6. Produce open questions for unresolved items.
+6. Generate or update a synchronized CSV BOM with one row per CDL component
+   declaration and matching `RefDes`.
+7. Produce open questions for unresolved items.
 
 Do not fill gaps by copying historical examples or generic module patterns.
 
@@ -61,6 +72,9 @@ Review for CDL-level issues:
 - Missing `// CHECK` tracking in open questions.
 - Unclear or missing annotations for intentionally absent connections.
 - Blocks that are too large or ambiguously scoped.
+- Synchronized CSV BOM mismatches: component declarations missing from the BOM,
+  BOM rows that have no matching CDL component, merged RefDes cells, or
+  mismatched values/packages/notes.
 
 Do not perform product-level schematic review unless explicitly requested with a
 separate review skill or domain-review scope. If the CDL reveals an electrical
@@ -75,13 +89,48 @@ Use when the user asks to convert CDL into a logical netlist.
 2. Convert `~~`, `-->`, and `==` statements into named nets.
 3. Preserve direction intent from `-->` as metadata.
 4. Preserve parameters and special annotations.
-5. Report unresolved `// CHECK` items.
-6. Stop at human-readable logical nets; do not resolve symbol pin numbers,
+5. Generate or update the synchronized CSV BOM from the component list.
+6. Report unresolved `// CHECK` items.
+7. Stop at human-readable logical nets; do not resolve symbol pin numbers,
    footprints, or EDA library identifiers.
+
+## Synchronized CSV BOM
+
+For any task that creates or updates CDL, produce a CSV BOM next to the CDL or
+at the user-requested path unless the user explicitly says not to.
+
+Required columns:
+
+```csv
+RefDes,PartValue,Package,Description,Populate,Variant,Status,CDL_Block,Notes
+```
+
+Rules:
+
+- `RefDes` must exactly match one CDL component declaration.
+- Use one row per component declaration. Never use `U1 U2`, ranges, or grouped
+  cells.
+- `PartValue` comes from the CDL component value token.
+- `Package` comes from the CDL parenthesized package when present; otherwise use
+  `TBD`.
+- `Description` comes from the CDL quoted note when present.
+- `Populate` should default to `Yes`, or use `DNP`, `OPT`, or `TP` when the CDL
+  special annotations say so.
+- `Variant` is blank unless the component is variant-dependent.
+- `Status` is `From-CDL` by default, or `CHECK` when the component declaration or
+  note contains `// CHECK`/unknowns.
+- `CDL_Block` is the label of the block where the component was declared.
+- `Notes` should capture relevant special annotations or unresolved checks.
+
+This BOM is a representation-sync artifact, not a procurement BOM. Do not add
+parts that are not declared in CDL just to make the purchasing list feel
+complete; instead update the CDL first, then regenerate the BOM.
 
 ## Output Expectations
 
 - CDL output should use CDL statements, not Markdown tables for connections.
+- CDL generation or updates should include the synchronized CSV BOM path and any
+  alignment warnings.
 - If the task is design-oriented, include open questions for unknown decisions.
 - If the task is review-oriented, report Errors, Warnings, Suggestions, and
   Domain Review Handoffs where applicable.

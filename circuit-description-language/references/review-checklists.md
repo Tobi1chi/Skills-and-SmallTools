@@ -52,6 +52,23 @@ domain-specific electrical design review.
 - [ ] EDA-specific pin numbers, footprints, and library mappings are not assumed
       unless explicitly provided outside CDL.
 
+## Synchronized CSV BOM
+
+- [ ] A CSV BOM is produced or updated whenever CDL is produced or updated,
+      unless explicitly declined by the user.
+- [ ] Every CDL component declaration has exactly one BOM row with the same
+      `RefDes`.
+- [ ] Every BOM `RefDes` has exactly one matching CDL component declaration.
+- [ ] No BOM row merges multiple designators such as `U1 U2` or `R1-R4`.
+- [ ] BOM `PartValue`, `Package`, and `Description` match the CDL declaration
+      unless a mismatch is explicitly marked.
+- [ ] `DNP`, `OPT`, and `TP` annotations are preserved in BOM status fields
+      rather than omitted.
+- [ ] Variant choices are represented with `Variant`/`Populate` fields, not by
+      duplicating the same active `RefDes` without explanation.
+- [ ] Unknown sourcing, price, supplier, footprint, or lifecycle facts are left
+      blank or marked `TBD`; they are not invented by the CDL skill.
+
 ## Domain Review Handoff
 
 Move these out of CDL review and into schematic/domain review when they matter:
