@@ -22,6 +22,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import paramiko
+from ssh_execution import Job, run_channel, command_line
 
 
 SKILL_DIR = Path(__file__).resolve().parents[1]
@@ -59,6 +60,7 @@ def load_connections():
                 "port": int(item.get("port", 22)),
                 "username": item["username"],
                 "key_path": item["key_path"],
+                "proxy_command": item.get("proxy_command"),
                 "verified_at": item.get("verified_at"),
                 "hostname": item.get("hostname"),
             }
@@ -106,6 +108,7 @@ def public_connection(alias, item):
         "verified_at": item.get("verified_at"),
         "hostname": item.get("hostname"),
         "has_key_path": bool(item.get("key_path")),
+        "uses_proxy": bool(item.get("proxy_command")),
     }
 
 
@@ -119,12 +122,28 @@ class PersistentShellSession:
         self.alias = alias
         self.config = config
         self.shell = shell
+        self.is_powershell = shell.lower().split()[0] in (
+            "powershell",
+            "powershell.exe",
+            "pwsh",
+            "pwsh.exe",
+        )
         self.created_at = time.time()
         self.last_used_at = None
         self.lock = threading.Lock()
 
         key_path = Path(config["key_path"]).expanduser()
         pkey = load_private_key(key_path, config.get("passphrase"))
+
+        self.proxy = None
+        proxy_command = config.get("proxy_command")
+        if proxy_command:
+            proxy_command = (
+                proxy_command.replace("%h", str(config["host"]))
+                .replace("%p", str(config.get("port", 22)))
+                .replace("%r", str(config["username"]))
+            )
+            self.proxy = paramiko.ProxyCommand(proxy_command)
 
         self.client = paramiko.SSHClient()
         self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
@@ -133,6 +152,7 @@ class PersistentShellSession:
             port=int(config.get("port", 22)),
             username=config["username"],
             pkey=pkey,
+            sock=self.proxy,
             timeout=connect_timeout,
         )
         transport = self.client.get_transport()
@@ -190,11 +210,24 @@ class PersistentShellSession:
                 }
 
             marker = f"__CODEX_SSH_DONE_{uuid.uuid4().hex}__"
-            payload = (
-                f"{command}\n"
-                "__codex_status=$?\n"
-                f"printf '\\n{marker}:%s\\n' \"$__codex_status\"\n"
-            )
+            if self.is_powershell:
+                payload = (
+                    "$global:LASTEXITCODE = 0\n"
+                    f"{command}\n"
+                    "$__codex_success = $?\n"
+                    "$__codex_status = if ($__codex_success) { "
+                    "[int]$global:LASTEXITCODE } elseif ($global:LASTEXITCODE -ne 0) { "
+                    "[int]$global:LASTEXITCODE } else { 1 }\n"
+                    f"[Console]::Error.WriteLine(\"{marker}ERR\")\n"
+                    f"[Console]::Out.WriteLine(\"`n{marker}:{{0}}\" -f $__codex_status)\n"
+                )
+            else:
+                payload = (
+                    f"{command}\n"
+                    "__codex_status=$?\n"
+                    f"printf '{marker}ERR\\n' >&2\n"
+                    f"printf '\\n{marker}:%s\\n' \"$__codex_status\"\n"
+                )
             started = time.time()
             stdout_chunks = []
             stderr_chunks = []
@@ -210,13 +243,14 @@ class PersistentShellSession:
                     "duration_ms": int((time.time() - started) * 1000),
                 }
 
-            marker_re = re.compile(re.escape(marker) + r":(-?\d+)")
+            marker_re = re.compile(re.escape(marker) + r":(-?\d+)\r?\n")
             deadline = started + timeout
             exit_code = None
+            stderr_done = False
             while time.time() < deadline:
-                if not self.is_connected():
-                    break
                 out, err = self._recv_available()
+                if err:
+                    stderr_chunks.append(err)
                 if out:
                     stdout_chunks.append(out)
                     stdout_text = "".join(stdout_chunks)
@@ -226,9 +260,14 @@ class PersistentShellSession:
                         before = stdout_text[: match.start()]
                         after = stdout_text[match.end() :]
                         stdout_chunks = [before + self._strip_marker_tail(after)]
-                        break
-                if err:
-                    stderr_chunks.append(err)
+                stderr_text = "".join(stderr_chunks)
+                if re.search(re.escape(marker) + r"ERR\r?\n", stderr_text):
+                    stderr_done = True
+                    stderr_chunks = [re.sub(re.escape(marker) + r"ERR\r?\n", "", stderr_text)]
+                if exit_code is not None and stderr_done:
+                    break
+                if not self.is_connected():
+                    break
                 time.sleep(0.05)
 
             out, err = self._recv_available()
@@ -240,9 +279,9 @@ class PersistentShellSession:
             duration_ms = int((time.time() - started) * 1000)
             self.last_used_at = time.time()
 
-            if exit_code is None:
+            if exit_code is None or not stderr_done:
                 try:
-                    self.channel.send("\x03")
+                    self.channel.close()
                 except Exception:
                     pass
                 return {
@@ -274,6 +313,8 @@ class PersistentShellSession:
                 self.channel.close()
         finally:
             self.client.close()
+            if self.proxy is not None:
+                self.proxy.close()
 
     def public_state(self):
         return {
@@ -285,6 +326,7 @@ class PersistentShellSession:
             "connected": self.is_connected(),
             "created_at": self.created_at,
             "last_used_at": self.last_used_at,
+            "config_version": getattr(self, "config_version", 1),
         }
 
 
@@ -295,33 +337,85 @@ class SessionRegistry:
         self.lock = threading.Lock()
         self.sessions = {}
         self.alias_index = {}
+        self.versions = {alias: 1 for alias in connections}
+        self.reload_lock = threading.Lock()
+        self.jobs = {}
 
     def list_sessions(self):
         with self.lock:
-            return [session.public_state() for session in self.sessions.values()]
+            states = []
+            for session in self.sessions.values():
+                state = session.public_state()
+                state["config_current"] = (session.alias in self.connections and
+                                           session.config_version == self.versions.get(session.alias))
+                states.append(state)
+            return states
 
-    def get_or_create(self, alias, shell="/bin/bash", connect_timeout=10):
-        if alias not in self.connections:
-            raise KeyError(f"unknown connection alias: {alias}")
+    def reload(self):
+        # Parse first; exceptions leave both configuration and versions intact.
+        with self.reload_lock:
+            connections = load_connections()
+            for item in connections.values():
+                for field in ("host", "username", "key_path"):
+                    if not isinstance(item.get(field), str) or not item[field]:
+                        raise ValueError("missing connection field: " + field)
+                if not 1 <= int(item.get("port", 22)) <= 65535:
+                    raise ValueError("invalid SSH port")
+            with self.lock:
+                old = self.connections
+                added = sorted(connections.keys() - old.keys())
+                removed = sorted(old.keys() - connections.keys())
+                modified = sorted(k for k in old.keys() & connections.keys() if old[k] != connections[k])
+                for alias in added + removed + modified:
+                    self.versions[alias] = self.versions.get(alias, 0) + 1
+                self.connections = connections
+            return dict(added=added, modified=modified, removed=removed)
 
+    def get_or_create(self, alias, shell="/bin/bash", connect_timeout=10, force_new=False):
         with self.lock:
-            existing_id = self.alias_index.get((alias, shell))
-            if existing_id:
-                existing = self.sessions.get(existing_id)
-                if existing and existing.is_connected():
-                    return existing, False
+            missing = alias not in self.connections
+        if missing:
+            self.reload()
+        with self.lock:
+            if alias not in self.connections:
+                raise KeyError("unknown connection alias")
+            config = dict(self.connections[alias])
+            version = self.versions[alias]
+            key = (alias, shell, version)
+            existing = self.sessions.get(self.alias_index.get(key))
+            if not force_new and existing and existing.is_connected():
+                return existing, False
+        # SSH connect/open/startup must never hold the registry lock.
+        session = PersistentShellSession(uuid.uuid4().hex, alias, config, shell, connect_timeout)
+        session.config_version = version
+        with self.lock:
+            winner = self.sessions.get(self.alias_index.get(key))
+            if not force_new and winner and winner.is_connected():
+                reuse = winner
+            else:
+                self.sessions[session.session_id] = session
+                self.alias_index[key] = session.session_id
+                reuse = None
+        if reuse:
+            session.close()
+            return reuse, False
+        return session, True
 
-            session_id = uuid.uuid4().hex
-            session = PersistentShellSession(
-                session_id=session_id,
-                alias=alias,
-                config=self.connections[alias],
-                shell=shell,
-                connect_timeout=connect_timeout,
-            )
-            self.sessions[session_id] = session
-            self.alias_index[(alias, shell)] = session_id
-            return session, True
+    def start_job(self, session, body):
+        if not self.allow_dangerous and is_dangerous_command(body["cmd"]):
+            raise PermissionError("dangerous command rejected")
+        command_line(body, "validation")
+        job = Job()
+        with self.lock:
+            # Bound retained job metadata as well as each job's output.
+            if len(self.jobs) >= 128:
+                expired = next((k for k, v in self.jobs.items() if v.state != "running"), None)
+                if expired is None:
+                    raise ValueError("job capacity reached")
+                self.jobs.pop(expired)
+            self.jobs[job.job_id] = job
+        threading.Thread(target=run_channel, args=(session, dict(body), job), daemon=True).start()
+        return job
 
     def get(self, session_id):
         with self.lock:
@@ -331,7 +425,9 @@ class SessionRegistry:
         with self.lock:
             session = self.sessions.pop(session_id, None)
             if session:
-                self.alias_index.pop((session.alias, session.shell), None)
+                key = (session.alias, session.shell, session.config_version)
+                if self.alias_index.get(key) == session_id:
+                    self.alias_index.pop(key, None)
         if session:
             session.close()
             return True
@@ -382,6 +478,15 @@ class SSHRequestHandler(BaseHTTPRequestHandler):
                 },
             )
             return
+        match = re.fullmatch(r"/jobs/([^/]+)", path)
+        if match:
+            with self.server.registry.lock:
+                job = self.server.registry.jobs.get(match.group(1))
+            if job is None:
+                self._error(HTTPStatus.NOT_FOUND, "job not found; restart/eviction loses history")
+            else:
+                self._send_json(HTTPStatus.OK, job.snapshot())
+            return
         if path == "/connections":
             self._send_json(
                 HTTPStatus.OK,
@@ -399,8 +504,32 @@ class SSHRequestHandler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         try:
             body = self._read_json()
+            if not isinstance(body, dict):
+                raise ValueError("JSON object required")
         except Exception as exc:
             self._error(HTTPStatus.BAD_REQUEST, f"invalid JSON body: {exc}")
+            return
+
+        if path == "/connections/reload":
+            try:
+                result = self.server.registry.reload()
+                self._send_json(HTTPStatus.OK, result)
+            except Exception:
+                self._error(HTTPStatus.BAD_REQUEST, "invalid connection configuration; previous configuration retained")
+            return
+
+        match = re.fullmatch(r"/jobs/([^/]+)/wait", path)
+        if match:
+            with self.server.registry.lock:
+                job = self.server.registry.jobs.get(match.group(1))
+            if job is None:
+                self._error(HTTPStatus.NOT_FOUND, "job not found; restart/eviction loses history")
+                return
+            try:
+                result = job.wait(int(body.get("cursor", 0)), float(body.get("timeout", 30)), body.get("phase_version"))
+                self._send_json(HTTPStatus.OK, result)
+            except (TypeError, ValueError):
+                self._error(HTTPStatus.BAD_REQUEST, "invalid wait parameters")
             return
 
         if path == "/sessions":
@@ -409,14 +538,14 @@ class SSHRequestHandler(BaseHTTPRequestHandler):
                 self._error(HTTPStatus.BAD_REQUEST, "alias is required")
                 return
             shell = body.get("shell") or "/bin/bash"
-            connect_timeout = int(body.get("connect_timeout", body.get("timeout", 10)))
             try:
-                session, created = self.server.registry.get_or_create(alias, shell, connect_timeout)
+                connect_timeout = int(body.get("connect_timeout", body.get("timeout", 10)))
+                session, created = self.server.registry.get_or_create(alias, shell, connect_timeout, body.get("force_new", False))
             except KeyError as exc:
                 self._error(HTTPStatus.NOT_FOUND, str(exc))
                 return
-            except Exception as exc:
-                self._error(HTTPStatus.BAD_GATEWAY, f"failed to create SSH session: {exc}")
+            except Exception:
+                self._error(HTTPStatus.BAD_GATEWAY, "failed to create SSH session")
                 return
             payload = session.public_state()
             payload["created"] = created
@@ -428,7 +557,7 @@ class SSHRequestHandler(BaseHTTPRequestHandler):
             threading.Thread(target=self.server.shutdown_server, daemon=True).start()
             return
 
-        match = re.match(r"^/sessions/([^/]+)/exec$", path)
+        match = re.match(r"^/sessions/([^/]+)/(exec|jobs)$", path)
         if match:
             session_id = match.group(1)
             command = body.get("cmd")
@@ -439,8 +568,35 @@ class SSHRequestHandler(BaseHTTPRequestHandler):
             if not session:
                 self._error(HTTPStatus.NOT_FOUND, "session not found")
                 return
-            timeout = int(body.get("timeout", 30))
-            result = session.execute(command, timeout=timeout, allow_dangerous=self.server.registry.allow_dangerous)
+            try:
+                mode = body.get("mode", "shell")
+                if mode not in ("shell", "exec"):
+                    raise ValueError("mode must be shell or exec")
+                independent = match.group(2) == "jobs" or mode == "exec" or body.get("sudo")
+                if independent:
+                    if match.group(2) == "exec":
+                        body.setdefault("timeout", 30)
+                    job = self.server.registry.start_job(session, body)
+                    if match.group(2) == "jobs":
+                        self._send_json(HTTPStatus.ACCEPTED, {"job_id": job.job_id, "state": "running"})
+                        return
+                    limit = float(body.get("timeout", 30))
+                    with job.condition:
+                        job.condition.wait_for(lambda: job.state != "running", timeout=limit + 1)
+                    result = job.snapshot(0)
+                    if result["state"] == "running":
+                        result["error"] = "http_wait_timeout; query job_id; do not replay"
+                else:
+                    if any(k in body for k in ("cwd", "env", "stdin", "sudo_password")):
+                        raise ValueError("cwd/env/stdin require mode=exec; shell state uses shell commands")
+                    result = session.execute(command, timeout=float(body.get("timeout", 30)),
+                                             allow_dangerous=self.server.registry.allow_dangerous)
+            except PermissionError:
+                self._error(HTTPStatus.FORBIDDEN, "dangerous command rejected")
+                return
+            except (ValueError, TypeError):
+                self._error(HTTPStatus.BAD_REQUEST, "invalid execution options")
+                return
             status = HTTPStatus.OK if result.get("exit_code", -1) != -2 else HTTPStatus.FORBIDDEN
             self._send_json(status, result)
             return

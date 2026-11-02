@@ -1,66 +1,111 @@
 # SSH Control Usage
 
-Run all Python commands with `uv`:
+Run Python through `uv`. From the skill directory use the unified client (stdlib
+only); the server still requires `uv run --with paramiko python`.
+
+## Client
 
 ```sh
-uv run --with paramiko python scripts/<script>.py ...
+uv run python scripts/ssh_client.py health
+uv run python scripts/ssh_client.py connections
+uv run python scripts/ssh_client.py reload
+uv run python scripts/ssh_client.py exec --alias example --cmd 'cd /tmp; pwd'
+uv run python scripts/ssh_client.py exec --alias example --mode exec --cwd /tmp --env NAME=value --cmd 'printf "$NAME"; cat' --stdin < input.txt
+uv run python scripts/ssh_client.py exec --alias example --force-new --cmd 'id'
+uv run python scripts/ssh_client.py exec --session SESSION_ID --cmd 'pwd'
+uv run python scripts/ssh_client.py exec --alias example --sudo --sudo-password-env UBUNTU_KEY --cmd 'id'
+uv run python scripts/ssh_client.py jobs start --alias example --cmd 'echo "__CODEX_PHASE__:prepare"; sleep 2; echo done'
+uv run python scripts/ssh_client.py jobs status JOB_ID
+uv run python scripts/ssh_client.py jobs wait JOB_ID --cursor 0 --timeout 30
 ```
 
-## Persistent HTTP Service
+`--url http://127.0.0.1:PORT` precedes the subcommand for an alternate service.
+`--stdin` reads business input from local stdin. `--env NAME=VALUE` may repeat;
+never use it or `--cmd` to pass passwords. Provision the sudo password in the
+client environment through an approved secret source; do not print it. The
+LaunchAgent need not inherit that variable. Missing variables fail locally.
+The client never starts/restarts a service and never retries a submitted command.
 
-Start the service from the skill directory:
+`exec --mode shell` preserves cwd/env in the persistent shell; use shell commands
+to change them. `exec --mode exec` and all sudo/jobs calls use separate POSIX
+`/bin/sh` channels on the same authenticated Transport. They do **not** inherit
+persistent cwd/env and do not block the shell. Independent execution is POSIX;
+Windows users should use persistent PowerShell, e.g.
+`--shell 'powershell.exe -NoLogo -NoProfile -Command -'`. No PTY is allocated for sudo.
+
+## HTTP schemas and compatibility
+
+JSON requests/responses; base URL defaults to `http://127.0.0.1:8765`.
+
+| Endpoint | Request / result |
+| --- | --- |
+| `GET /health` | Status and sessions including version/current state |
+| `GET /connections` | Public aliases; no private key paths |
+| `POST /connections/reload` | `{}` → `added`, `modified`, `removed` arrays |
+| `POST /sessions` | `alias`, optional `shell`, `connect_timeout` (10), `force_new` (false) → session state and `created` |
+| `POST /sessions/{id}/exec` | `cmd`, optional `mode` (`shell` default / `exec`), `timeout` (30), `sudo`, `sudo_password`, `cwd`, `env` object, `stdin` string |
+| `POST /sessions/{id}/jobs` | Same execution fields; independent channel regardless of mode; no execution deadline unless `timeout` supplied → 202 with `job_id` immediately |
+| `GET /jobs/{id}` | Status, duration, code, phase and finite output tails |
+| `POST /jobs/{id}/wait` | `cursor` (0), `timeout` (30, capped at 50), optional `phase_version` → incremental output and status |
+| `DELETE /sessions/{id}` | Close session and Transport, affecting jobs on that Transport |
+| `POST /shutdown` | Close all sessions/jobs and stop service; coordinate shared users first |
+
+The original `{ "cmd": "pwd", "timeout": 30 }` shell API remains valid.
+`cwd`, `env`, `stdin` require independent mode; sudo selects it automatically.
+`sudo_password` is an in-memory JSON input intended for the client to supply;
+do not put it into curl argv, saved JSON, logs, or chat. A no-password sudo call
+uses `sudo -n`; authentication failure returns `error: sudo_password_required`.
+With a supplied password it returns `sudo_auth_failed` if authentication fails.
+These codes describe pre-command sudo failure; inspect stderr for policy or
+missing-sudo issues. No command is replayed. Independent commands use actual SSH
+exit codes; nonzero business exit codes still have state `completed`.
+Synchronous independent execution includes `job_id`, so an HTTP timeout can be
+resolved by querying the job. Persistent shell timeout closes that shell to
+prevent later commands from consuming unfinished output; the outcome is uncertain.
+
+### Configuration versions
+
+Reload parses and validates the complete file before swapping; invalid data
+returns 400 and leaves the prior configuration untouched. New/changed/removed
+aliases increment per-alias versions. Session `config_version` is immutable;
+health adds `config_current` to indicate whether it still matches the registry.
+Reuse keys include alias, shell and version; a changed alias creates a fresh
+session. A removed alias cannot create sessions but its existing session IDs
+continue working. `force_new` bypasses reuse without closing old sessions. A
+connect already in flight may finish with its captured version; health reports
+it as stale if a reload changed the alias meanwhile. SSH I/O runs outside the
+registry lock. Update connections.json atomically to avoid reading a partial file.
+
+### Jobs, phases and bounded output
+
+States: `running` (exit_code null), `completed` (real remote code), `failed`
+(pre-command sudo failure), `unknown` (disconnect/channel error/execution timeout;
+code null, command may have run). Waiting timeout is not execution timeout.
+`duration_ms` freezes on completion. Polling or HTTP disconnect never stops a job.
+
+`status` returns the last 16,384 characters per stream, with `tail_truncated`.
+Each job retains at most 1,048,576 Unicode characters across both streams.
+`cursor` is an output-event sequence shared across stdout/stderr, not a byte
+offset. Use the returned cursor on the next wait; it returns only newer events.
+`dropped_before` marks the evicted event boundary; `truncated` means the requested
+cursor predates retained output. Lost output cannot be recovered through this
+service. Up to 128 jobs are retained; new jobs evict the oldest finished job, or
+are rejected when all slots are running. Stream ordering is preserved separately;
+no cross-stream time ordering is promised.
+
+Wait returns on completion, explicit phase change, or its bounded timeout, not
+on every log line. Pass the previous `phase_version` to catch a phase changed
+between requests. Scripts report phases by printing a complete stdout line:
 
 ```sh
-uv run --with paramiko python scripts/ssh_server.py --bind 127.0.0.1 --port 8765
+printf '__CODEX_PHASE__:download\n'
 ```
 
-Check service health:
-
-```sh
-curl -s http://127.0.0.1:8765/health
-```
-
-List connection aliases:
-
-```sh
-curl -s http://127.0.0.1:8765/connections
-```
-
-Create or reuse a persistent shell session:
-
-```sh
-curl -s -X POST http://127.0.0.1:8765/sessions \
-  -H 'Content-Type: application/json' \
-  -d '{"alias":"example","shell":"/bin/bash"}'
-```
-
-Execute in that same shell:
-
-```sh
-curl -s -X POST http://127.0.0.1:8765/sessions/<session_id>/exec \
-  -H 'Content-Type: application/json' \
-  -d '{"cmd":"cd /tmp && pwd","timeout":30}'
-```
-
-Close a session:
-
-```sh
-curl -s -X DELETE http://127.0.0.1:8765/sessions/<session_id>
-```
-
-Stop the service:
-
-```sh
-curl -s -X POST http://127.0.0.1:8765/shutdown
-```
-
-Notes:
-
-- The service listens on `127.0.0.1` by default.
-- It refuses non-local binds unless started with `--allow-nonlocal-bind`.
-- Sessions are not closed by idle timeout.
-- If SSH is disconnected by the network or remote host, the next exec returns a
-  disconnected error and does not auto-reconnect.
+The line is kept in stdout and phase metadata; no progress percentages are
+inferred. Service restart loses job records and can interrupt remote processes;
+404 after restart/eviction means history unavailable, never permission to replay.
+A disconnected job is `unknown`, not an automatic failure/retry. Verify remote
+state through an authorized new session before any recovery action.
 
 ## Short-Lived Commands
 

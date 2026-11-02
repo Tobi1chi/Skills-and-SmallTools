@@ -36,37 +36,50 @@ If no matching alias exists, ask for:
 Never paste or store private key contents, passwords, passphrases, or tokens in
 the connection index or conversation logs.
 
-## Preferred Workflow: Persistent SSH Service
+## Default Workflow: Unified Client
 
-Use the persistent service when multiple commands should reuse one shell and
-preserve state such as `cd`, environment variables, shell variables, or long
-interactive setup.
+Use `scripts/ssh_client.py` for HTTP command work; do not write temporary HTTP or
+sudo helper scripts. It checks service health, reuses alias sessions, and never
+restarts the service or retries a business command after an uncertain result.
+Run from the skill directory:
 
-Start the local service from the skill directory:
+```sh
+uv run python scripts/ssh_client.py health
+uv run python scripts/ssh_client.py exec --alias example --cmd 'pwd'
+uv run python scripts/ssh_client.py exec --alias example --mode exec --cmd 'id'
+```
+
+- `shell` (default) preserves cwd/env in the persistent shell. `exec` uses a new
+  channel on the same SSH Transport, with explicit cwd/env/stdin when needed.
+- `--sudo` always uses an independent channel. For password authentication use
+  `--sudo-password-env UBUNTU_KEY`; only the variable name belongs in argv.
+  Never print its value. Do not create a permanent root shell or modify sudoers.
+- Reload changed aliases with `ssh_client.py reload`. Unknown aliases trigger
+  one reload automatically. Existing sessions retain their configuration version;
+  alias reuse selects the current version. `--force-new` creates a new Transport
+  and shell for changes such as group membership; old sessions remain open.
+- For long operations use `jobs start`, then `jobs status` / `jobs wait` with the
+  returned cursor. Waiting does not cancel a job. A disconnect gives `unknown`;
+  inspect before deciding what to do, never automatically replay installation.
+- Jobs are in service memory only; service restart loses task tracking and can
+  interrupt execution. Do not restart a shared service on a query failure.
+
+On macOS, prefer the existing `com.openai.codex.ssh-control` LaunchAgent. Check
+health before any manual service start. Updating files does not reload a running
+process: arrange a safe switch after active jobs/sessions are finished.
+For a new service, run:
 
 ```sh
 uv run --with paramiko python scripts/ssh_server.py --bind 127.0.0.1 --port 8765
 ```
 
-The service:
+It listens on localhost without authentication; only trusted local clients should
+have access. Sessions do not auto-reconnect. Proxy commands (`%h`, `%p`, `%r`)
+and persistent PowerShell remain supported.
 
-- Listens on `127.0.0.1` by default.
-- Does not use a token by default.
-- Keeps sessions open until explicitly closed, the service exits, or SSH is
-  disconnected by the network/remote host.
-- Does not automatically reconnect disconnected sessions, because shell state
-  would be lost.
-
-Core endpoints:
-
-| Endpoint | Purpose |
-|----------|---------|
-| `GET /health` | Service status and active sessions |
-| `GET /connections` | Available aliases without private key paths |
-| `POST /sessions` | Create or reuse a persistent shell session |
-| `POST /sessions/{session_id}/exec` | Execute a command in that shell |
-| `DELETE /sessions/{session_id}` | Close one session |
-| `POST /shutdown` | Close all sessions and stop the service |
+Read [usage.md](references/usage.md) for CLI examples, HTTP schemas, cursor and
+version semantics, and SFTP; read [security-notes.md](references/security-notes.md)
+for sudo input separation, secret handling, and authorization boundaries.
 
 ## Short-Lived Fallback Scripts
 

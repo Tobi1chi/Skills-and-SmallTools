@@ -1,40 +1,41 @@
-# SSH Skill 安全注意事项
+# SSH Control 安全注意事项
 
-## 私钥处理原则
+## 秘密与本地服务
 
-1. **不要记录私钥内容**：不在日志、stdout、对话中展示私钥内容
-2. **临时文件**：如果必须写磁盘，用 `tempfile.NamedTemporaryFile`，权限设为 0o600，用完立即 `os.unlink()`
-3. **内存加载**：优先使用 `paramiko.RSAKey.from_private_key(io.StringIO(...))` 避免落盘
-4. **会话结束告知用户**：提醒用户这次会话的连接信息不会被保存
+- 私钥内容、密码、passphrase、令牌不得写入连接索引、命令参数、日志或聊天。
+  连接索引可引用本机 key_path；仓库只保留示例连接，不发布本机索引或 keys/。
+- 默认服务监听 localhost 且无认证，信任本机客户端；不要向不可信网络开放。
+- 默认 AutoAddPolicy 首次信任主机；需要严格主机验证时应使用已确认的 known_hosts
+  与 RejectPolicy。当前版本不改变原有主机密钥策略。
+- 统一客户端从 `--sudo-password-env NAME` 指定的本地环境变量读取密码，只通过
+  HTTP 请求内存与 SSH channel 的认证输入发送。服务不记录请求体、不回显异常
+  细节，并在输出保存前遮蔽所提供密码（含跨读取边界的匹配）。这不是通用
+  敏感数据过滤器：不要让业务命令输出其他秘密，不要开启网络请求体抓包/调试日志。
+- Python 字符串无法保证内存擦除；密码不会被设计为持久化状态，使用后释放引用。
 
-## 主机验证
+## sudo 输入协议
 
-- 默认使用 `AutoAddPolicy`（首次连接自动信任）
-- 生产环境建议：让用户提供已知的 host fingerprint，用 `RejectPolicy` + 手动 known_hosts
+sudo 在现有 SSH Transport 的独立 channel 执行，不占用持久 shell、不保留 root
+shell。不提供密码时使用 `sudo -n`，返回结构化 `sudo_password_required`。
+提供密码时使用唯一认证提示，只在收到提示后发送一次密码；特权包装命令发出
+另一个唯一就绪标记后，才发送业务 stdin 并关闭写端。NOPASSWD/缓存命中时不
+发送密码。脚本正文经过 shell quoting 放在命令参数中，不与认证或业务 stdin
+拼接。错误密码不重试业务命令；sudo 认证失败、连接异常或未知结果都不自动重放。
+不请求 PTY，要求 TTY 或交互认证的策略需要单独处理，不修改 sudoers 绕过。
 
-## 命令注入防护
+`cwd` 与 `env` 在独立命令内显式设置，不假定继承持久 shell 状态。env 名称按
+POSIX 变量名验证，值与路径按 shell 参数引用。此接口本来就允许执行 shell 代码；
+不要将不可信文本直接插入 cmd。
 
-- 不要把用户输入直接拼接进 shell 命令
-- 敏感参数用引号包裹：`f"ls '{user_path}'"` → 但更好的做法是白名单验证路径
+## 授权与共享服务
 
-## 需要二次确认的操作
+危险操作需用户明确授权：广泛删除、重启/关机、磁盘格式化/覆盖、修改账号或
+sudoers 文件、停止关键服务、生产数据库写入等。服务的危险模式匹配只是辅助，
+不替代授权。已有明确授权时按授权范围执行，不额外扩大范围。
 
-| 操作 | 原因 |
-|------|------|
-| `rm -rf` | 不可恢复删除 |
-| `reboot/shutdown` | 服务中断 |
-| `dd if=... of=/dev/...` | 磁盘覆盖 |
-| `DROP/TRUNCATE TABLE` | 数据丢失 |
-| `iptables -F` | 防火墙清空 |
-| `chmod -R 777` | 权限漏洞 |
-| `kill -9 1` (PID 1) | 系统崩溃 |
-
-## sudo 配置建议（给用户）
-
-推荐的最小权限 sudoers 配置（仅允许特定服务操作）：
-
-```
-deploy ALL=(ALL) NOPASSWD: /bin/systemctl restart myapp, /bin/systemctl status myapp
-```
-
-避免：`deploy ALL=(ALL) NOPASSWD: ALL`
+不要为了查询失败、加载代码或连接别名重启共享服务。别名变化用 reload；需要
+用户组等新登录状态用 force_new。代码更新后先确认其他任务与会话的安全切换时机。
+删除 session 会关闭其 Transport，包括其任务。HTTP wait 结束不取消任务；运行时
+exit_code 为 null。断连为 unknown，先核实远端状态，不自动重跑安装。
+服务重启不保证任务存活或可继续查询。日志有限且可能截断，关键业务审计应由
+获得授权的远端程序负责，不能依赖此服务作为永久日志库。
