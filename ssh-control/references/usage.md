@@ -128,6 +128,20 @@ EOF
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.openai.codex.ssh-control.plist
 ```
 
+## Service operations
+
+- Health: `uv run python scripts/ssh_client.py health`. If it fails, check
+  `launchctl print gui/$(id -u)/com.openai.codex.ssh-control` and
+  `logs/ssh_server.stderr.log` before starting anything by hand.
+- Restart after code updates: `launchctl kickstart -k gui/$(id -u)/com.openai.codex.ssh-control`,
+  only when no attached job or shell work is in flight (detached jobs survive).
+  Never restart because a single query failed; other agents may share the service.
+- MCP tools missing in Codex: `codex mcp get ssh-control` should show the entry
+  above. Codex sessions started before the entry was added need a restart.
+  The skill declares the dependency in `agents/openai.yaml`.
+- Token: `<skill>/.env`, created by whichever runs first (service, client, MCP
+  header helper). Delete it to rotate; the service re-reads it per request.
+
 Local-only files never belong in git: `.env`, `keys/`, `logs/`, `state/`, and
 your real `references/connections.json`/`connections.md` (the repo keeps examples).
 
