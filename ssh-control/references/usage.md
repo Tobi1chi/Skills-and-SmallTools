@@ -17,6 +17,23 @@ uv run python scripts/ssh_client.py exec --alias example --sudo --sudo-password-
 uv run python scripts/ssh_client.py jobs start --alias example --cmd 'echo "__CODEX_PHASE__:prepare"; sleep 2; echo done'
 uv run python scripts/ssh_client.py jobs status JOB_ID
 uv run python scripts/ssh_client.py jobs wait JOB_ID --cursor 0 --timeout 30
+uv run python scripts/ssh_client.py jobs cancel JOB_ID
+uv run python scripts/ssh_client.py jobs list
+uv run python scripts/ssh_client.py jobs attach --alias example JOB_ID
+uv run python scripts/ssh_client.py jobs start --alias example --attached --cmd 'make'
+uv run python scripts/ssh_client.py upload --alias example --local ./app.conf --remote /tmp/app.conf
+uv run python scripts/ssh_client.py download --alias example --remote /var/log/app --local ./logs --recursive
+```
+
+Native equivalents for detached jobs (no service needed; the alias must be an
+`~/.ssh/config` Host):
+
+```sh
+ssh example '~/.codex-ssh-jobs/codex-job list'
+ssh example '~/.codex-ssh-jobs/codex-job status JOB_ID'
+ssh example '~/.codex-ssh-jobs/codex-job tail JOB_ID 100'
+ssh example '~/.codex-ssh-jobs/codex-job cancel JOB_ID'
+ssh example '~/.codex-ssh-jobs/codex-job run "make -j8"'   # prints "started ID PID"
 ```
 
 `--url http://127.0.0.1:PORT` precedes the subcommand for an alternate service.
@@ -35,7 +52,92 @@ Windows users should use persistent PowerShell, e.g.
 
 ## HTTP schemas and compatibility
 
-JSON requests/responses; base URL defaults to `http://127.0.0.1:8765`.
+JSON requests/responses; base URL defaults to `http://127.0.0.1:47622`
+(override with `--url` or `SSH_CONTROL_URL`). Every request needs
+`Authorization: Bearer <token>` (token in the skill's `.env` as
+`SSH_CONTROL_TOKEN=...`, created on first use; `SSH_CONTROL_ENV_FILE` relocates it and
+the client also honors a `SSH_CONTROL_TOKEN` env var), a local `Host`
+(`127.0.0.1`/`localhost`/`[::1]` with the service port) and no `Origin` header;
+POST bodies must be `Content-Type: application/json`. Failures: 401
+`missing_or_invalid_token`, 403 `host_not_allowed` / `browser_requests_not_allowed`,
+415 `content_type_must_be_application_json`. Prefer `ssh_client.py`; for a manual
+call read the token into a variable without echoing it:
+
+```sh
+TOKEN=$(sed -n 's/^SSH_CONTROL_TOKEN=//p' .env)
+curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:47622/health
+```
+
+## MCP endpoint
+
+`POST /mcp` speaks MCP streamable HTTP with plain JSON responses (no SSE; `GET`
+and `HEAD /mcp` → 405). Same auth as above. Methods: `initialize` (echoes
+2024-11-05 / 2025-03-26 / 2025-06-18 / 2026-07-28), `notifications/*` → 202,
+`ping`, `tools/list`, `tools/call`. Tool results are text: output, `[stderr]`
+block, then one status line such as `[exit 0 · 105 ms]` or
+`[running · 407 ms · cursor 1 · phase build]`.
+
+| Tool | Arguments |
+| --- | --- |
+| `ssh_hosts` | `reload` |
+| `ssh_exec` | `alias`, `cmd`, `mode` (shell/exec), `timeout` (30, max 600), `max_output` (20000, keeps the tail), exec-only `cwd`/`env`/`stdin`, `sudo` (`sudo -n` only) |
+| `ssh_job` | `action` start/wait/status/cancel/list/attach, `alias`, `cmd`, `job_id`, `cursor`, `timeout` (≤50), `attached`, `cwd`/`env`/`stdin`/`sudo`, `max_output` |
+| `ssh_transfer` | `alias`, `direction` upload/download, absolute `local`, `remote`, `recursive` |
+| `ssh_session_reset` | `alias` (closes its sessions; detached jobs keep running) |
+
+Codex registration (`~/.codex/config.toml`); the helper prints the auth header
+from `.env` on every connection, so the token never sits in config. It runs
+through `sh -c`, so `$HOME` expands (adjust the uv path if it lives elsewhere):
+
+```toml
+[mcp_servers.ssh-control]
+url = "http://127.0.0.1:47622/mcp"
+http_headers_helper = "$HOME/.local/bin/uv run --no-project -q python $HOME/.codex/skills/ssh-control/scripts/ssh_token.py headers"
+startup_timeout_sec = 20
+tool_timeout_sec = 660
+```
+
+## Install on a new Mac
+
+Copy this folder to `~/.codex/skills/ssh-control`, then install the LaunchAgent
+(the service creates `.env` on first start) and add the `config.toml` entry above:
+
+```sh
+SKILL="$HOME/.codex/skills/ssh-control"; UV="$(command -v uv)"
+mkdir -p "$SKILL/logs"
+cat > ~/Library/LaunchAgents/com.openai.codex.ssh-control.plist <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.openai.codex.ssh-control</string>
+  <key>ProgramArguments</key><array>
+    <string>$UV</string><string>run</string><string>--with</string><string>paramiko</string>
+    <string>python</string><string>$SKILL/scripts/ssh_server.py</string>
+    <string>--bind</string><string>127.0.0.1</string><string>--port</string><string>47622</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ProcessType</key><string>Background</string>
+  <key>StandardOutPath</key><string>$SKILL/logs/ssh_server.stdout.log</string>
+  <key>StandardErrorPath</key><string>$SKILL/logs/ssh_server.stderr.log</string>
+  <key>EnvironmentVariables</key><dict>
+    <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+</dict></plist>
+EOF
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.openai.codex.ssh-control.plist
+```
+
+Local-only files never belong in git: `.env`, `keys/`, `logs/`, `state/`, and
+your real `references/connections.json`/`connections.md` (the repo keeps examples).
+
+Manual handshake for debugging:
+
+```sh
+H=$(uv run --no-project -q python scripts/ssh_token.py headers | sed 's/.*"Authorization": "\(.*\)"}/\1/')
+curl -s http://127.0.0.1:47622/mcp -H "Authorization: $H" -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+```
 
 | Endpoint | Request / result |
 | --- | --- |
@@ -44,10 +146,14 @@ JSON requests/responses; base URL defaults to `http://127.0.0.1:8765`.
 | `POST /connections/reload` | `{}` → `added`, `modified`, `removed` arrays |
 | `POST /sessions` | `alias`, optional `shell`, `connect_timeout` (10), `force_new` (false) → session state and `created` |
 | `POST /sessions/{id}/exec` | `cmd`, optional `mode` (`shell` default / `exec`), `timeout` (30), `sudo`, `sudo_password`, `cwd`, `env` object, `stdin` string |
-| `POST /sessions/{id}/jobs` | Same execution fields; independent channel regardless of mode; no execution deadline unless `timeout` supplied → 202 with `job_id` immediately |
-| `GET /jobs/{id}` | Status, duration, code, phase and finite output tails |
+| `POST /sessions/{id}/jobs` | Same execution fields plus `attached` (false). Detached by default (POSIX remotes; not with `sudo_password`); attached jobs stream over one channel → 202 with `job_id`, `detached`, `native` hint |
+| `POST /sessions/{id}/sftp` | `direction` (`upload`/`download`), absolute `local`, `remote`, `recursive` → `total`, `failed`, first 50 entries |
+| `GET /jobs` | Summaries of tracked jobs (including ones restored after restart) |
+| `GET /jobs/{id}` | Status, duration, code, phase and finite output tails; reattaches a detached job |
 | `POST /jobs/{id}/wait` | `cursor` (0), `timeout` (30, capped at 50), optional `phase_version` → incremental output and status |
-| `DELETE /sessions/{id}` | Close session and Transport, affecting jobs on that Transport |
+| `POST /jobs/{id}/cancel` | Detached: TERM the remote process group; attached: close the channel |
+| `POST /jobs/attach` | `alias`, `job_id` → follow a detached job this service does not know (e.g. started natively) |
+| `DELETE /sessions/{id}` | Close session and Transport; attached jobs on it end, detached jobs keep running |
 | `POST /shutdown` | Close all sessions/jobs and stop service; coordinate shared users first |
 
 The original `{ "cmd": "pwd", "timeout": 30 }` shell API remains valid.
@@ -61,7 +167,8 @@ missing-sudo issues. No command is replayed. Independent commands use actual SSH
 exit codes; nonzero business exit codes still have state `completed`.
 Synchronous independent execution includes `job_id`, so an HTTP timeout can be
 resolved by querying the job. Persistent shell timeout closes that shell to
-prevent later commands from consuming unfinished output; the outcome is uncertain.
+prevent later commands from consuming unfinished output; the outcome is uncertain
+and the next call reopens the shell (`shell_restarted`, cwd/env reset).
 
 ### Configuration versions
 
@@ -102,20 +209,37 @@ printf '__CODEX_PHASE__:download\n'
 ```
 
 The line is kept in stdout and phase metadata; no progress percentages are
-inferred. Service restart loses job records and can interrupt remote processes;
-404 after restart/eviction means history unavailable, never permission to replay.
-A disconnected job is `unknown`, not an automatic failure/retry. Verify remote
-state through an authorized new session before any recovery action.
+inferred.
+
+**Detached jobs** (default for `jobs start`) run as
+`~/.codex-ssh-jobs/<id>/run.sh` on the remote host with stdin/stdout/stderr,
+pid, started_at and exit_code as plain files (`codex-job`, installed alongside,
+is `scripts/remote_job.sh`). The service follows them by byte offset, so an SSH
+drop only sets `attached: false` with an explanatory `error` while the state
+stays `running`; the next status/wait reattaches without losing output. Job
+records persist in `state/jobs/`; after a service restart jobs show
+`restored: true`, their cursor restarts at 0, and output is re-read from the
+remote files (last 1 MiB). States add `cancelled`; `unknown` with
+`remote_process_vanished` means the process died without an exit code (kill -9,
+reboot). Finished job directories older than 7 days are pruned on the next start.
+
+**Attached jobs** (`--attached`, sudo with a password, PowerShell sessions, and
+synchronous `mode=exec`) end with their channel: a disconnect is `unknown`,
+service restart loses them, and 404 means history unavailable, never
+permission to replay. Verify remote state through an authorized new session
+before any recovery action.
 
 ## Short-Lived Commands
+
+All short-lived scripts accept `--alias` (connections.json or `~/.ssh/config`)
+or `--host HOST` (ssh config applies, like `ssh HOST`), plus optional
+`--port/--user/--key/--passphrase` overrides.
 
 Run one or more independent commands:
 
 ```sh
 uv run --with paramiko python scripts/run_command.py \
-  --host 203.0.113.10 \
-  --user ubuntu \
-  --key /absolute/path/to/private-key.pem \
+  --alias example \
   --cmd "uptime" \
   --cmd "df -h"
 ```
@@ -124,9 +248,7 @@ Run multiple steps in one temporary shell:
 
 ```sh
 uv run --with paramiko python scripts/interactive_shell.py \
-  --host 203.0.113.10 \
-  --user ubuntu \
-  --key /absolute/path/to/private-key.pem \
+  --alias example \
   --steps '["cd /var/www/myapp", "pwd", "git status --short"]'
 ```
 
@@ -149,17 +271,16 @@ control sequences, and CR/LF output where the terminal allows it. It also
 disables `errexit` around each wrapped step so that a prior `set -e` does not
 prevent the sentinel from being printed.
 
-Avoid using it for full-screen or strongly interactive programs such as `vim`,
-`less`, `top`, password prompts, or installers that wait for input; those should
-timeout and stop subsequent steps, or use a purpose-built interactive flow.
+Each step runs as `eval '<step>' </dev/null`: a step that reads stdin sees EOF
+instead of swallowing the sentinel, and an unbalanced quote fails only that step.
+Full-screen programs (`vim`, `less`, `top`) and password prompts are still not
+supported; use a purpose-built interactive flow.
 
 Upload a file:
 
 ```sh
 uv run --with paramiko python scripts/sftp_upload.py \
-  --host 203.0.113.10 \
-  --user ubuntu \
-  --key /absolute/path/to/private-key.pem \
+  --alias example \
   --local ./nginx.conf \
   --remote /tmp/nginx.conf
 ```
@@ -168,9 +289,7 @@ Download a file:
 
 ```sh
 uv run --with paramiko python scripts/sftp_download.py \
-  --host 203.0.113.10 \
-  --user ubuntu \
-  --key /absolute/path/to/private-key.pem \
+  --alias example \
   --remote /var/log/syslog \
   --local ./syslog
 ```

@@ -22,7 +22,7 @@ supporting guides or templates.
 | `profile-writing-style` | Analyze writing samples and produce a reusable Markdown profile of the author's prose habits. |
 | `project-graph-prg` | Generate, inspect, validate, edit, layout-check, and repair Project Graph `.prg` files. |
 | `rewrite-by-example` | Calibrate academic de-AI rewriting from user-rewritten example sentences before applying the style to the rest of a manuscript. |
-| `ssh-control` | Operate remote Linux/Unix hosts over SSH, including commands, persistent shells, and SFTP transfers. |
+| `ssh-control` | Operate remote Linux/Unix hosts over SSH through a local service with MCP tools: persistent shells, detached remote jobs, and SFTP transfers. |
 | `stm32-macos-makefile` | Configure or repair macOS STM32 Makefile workflows with clangd, OpenOCD, ST-Link, and helper shell setup. |
 
 ## Other Tools

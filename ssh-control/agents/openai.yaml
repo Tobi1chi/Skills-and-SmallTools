@@ -1,4 +1,12 @@
 interface:
   display_name: "SSH Control"
-  short_description: "Run SSH commands, persistent shell sessions, and SFTP transfers"
+  short_description: "Run SSH commands, persistent shell sessions, detached jobs and SFTP transfers"
   default_prompt: "Use $ssh-control to connect to a remote host over SSH, run commands, or manage a persistent shell session."
+
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "ssh-control"
+      description: "Local ssh-control service (MCP over streamable HTTP; LaunchAgent on 127.0.0.1:47622, token from the skill's .env)"
+      transport: "streamable_http"
+      url: "http://127.0.0.1:47622/mcp"

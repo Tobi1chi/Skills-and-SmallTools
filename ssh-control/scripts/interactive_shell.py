@@ -2,10 +2,12 @@
 r"""
 SSH 交互式 Shell 脚本 —— 在同一个远端 shell 会话中执行多步骤命令
 用法：
-  uv run --with paramiko python scripts/interactive_shell.py --host HOST --user USER --key KEY_PATH \
+  uv run --with paramiko python scripts/interactive_shell.py --alias ALIAS \
       --steps '["cd /var/www", "pwd", "export FOO=bar", "echo $FOO"]'
 
 参数：
+  --alias / --host      目标（--host 与 `ssh HOST` 一样套用 ~/.ssh/config）
+  --port/--user/--key/--passphrase  覆盖解析结果
   --steps JSON_ARRAY    要按顺序执行的命令列表（JSON 字符串）
   --env KEY=VAL         设置环境变量（可多次使用）
   --shell SHELL         使用的远端 shell（默认 /bin/bash，适合 Linux 服务器）
@@ -26,20 +28,11 @@ import time
 import uuid
 from pathlib import Path
 
-import paramiko
+from ssh_connect import add_target_args, connect_from_args
 
 
 ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 BRACKETED_PASTE_RE = re.compile(r"\x1b\[\?2004[hl]")
-
-
-def load_private_key(key_path, passphrase=None):
-    for key_class in [paramiko.RSAKey, paramiko.Ed25519Key, paramiko.ECDSAKey]:
-        try:
-            return key_class.from_private_key_file(str(key_path), password=passphrase)
-        except Exception:
-            continue
-    raise ValueError(f"无法识别私钥格式或密码错误：{key_path}")
 
 
 def validate_steps(steps):
@@ -134,24 +127,13 @@ def parse_exit_code(raw_output, done_marker):
     return int(match.group(1))
 
 
-def interactive_session(host, username, key_path, steps, port=22, passphrase=None,
-                        env_vars=None, shell="/bin/bash", cmd_timeout=30):
+def interactive_session(args, steps, env_vars=None, shell="/bin/bash", cmd_timeout=30):
     validate_steps(steps)
     exports = parse_env_vars(env_vars)
 
-    client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-
-    key_path = Path(key_path).expanduser()
-    try:
-        pkey = load_private_key(key_path, passphrase)
-    except Exception as e:
-        print(json.dumps({"error": str(e)}, ensure_ascii=False))
-        sys.exit(1)
-
+    client, proxy = connect_from_args(args)
     channel = None
     try:
-        client.connect(host, port=port, username=username, pkey=pkey, timeout=10)
         channel = client.invoke_shell(term="xterm", width=220, height=50)
         channel.settimeout(cmd_timeout)
 
@@ -178,7 +160,9 @@ def interactive_session(host, username, key_path, steps, port=22, passphrase=Non
             wrapped = (
                 f"printf '\\n{start_marker}\\n'\n"
                 "set +e\n"
-                f"{cmd}\n"
+                # Quoted eval + stdin from /dev/null: a step that reads stdin or
+                # has unbalanced quotes cannot swallow the sentinel lines.
+                f"eval {shlex.quote(cmd)} </dev/null\n"
                 "__codex_status=$?\n"
                 "set +e\n"
                 f"printf '\\n{done_marker}:%s\\n' \"$__codex_status\"\n"
@@ -210,18 +194,16 @@ def interactive_session(host, username, key_path, steps, port=22, passphrase=Non
         if channel is not None:
             channel.close()
         client.close()
+        if proxy is not None:
+            proxy.close()
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--host", required=True)
-    parser.add_argument("--port", type=int, default=22)
-    parser.add_argument("--user", required=True)
-    parser.add_argument("--key", required=True)
+    add_target_args(parser)
     parser.add_argument("--steps", required=True, help='JSON 数组，如 ["cd /app", "ls"]')
     parser.add_argument("--env", action="append", dest="env_vars", default=[])
     parser.add_argument("--shell", default="/bin/bash")
-    parser.add_argument("--passphrase", default=None)
     parser.add_argument("--timeout", type=int, default=30)
     args = parser.parse_args()
 
@@ -233,11 +215,8 @@ def main():
         print(json.dumps({"error": f"参数错误：{e}"}, ensure_ascii=False))
         sys.exit(1)
 
-    interactive_session(
-        host=args.host, username=args.user, key_path=args.key,
-        steps=steps, port=args.port, passphrase=args.passphrase,
-        env_vars=args.env_vars, shell=args.shell, cmd_timeout=args.timeout,
-    )
+    interactive_session(args, steps, env_vars=args.env_vars, shell=args.shell,
+                        cmd_timeout=args.timeout)
 
 
 if __name__ == "__main__":

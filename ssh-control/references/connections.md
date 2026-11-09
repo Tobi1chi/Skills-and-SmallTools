@@ -1,8 +1,10 @@
 # SSH Connection Index
 
 This file is a human-readable index for SSH connection aliases.
-`scripts/ssh_server.py` reads `connections.json` first, so keep this Markdown
-file and `connections.json` in sync.
+The service merges `connections.json` with every concrete `Host` in
+`~/.ssh/config` (explicit fields here win; missing ones fall back to ssh config).
+Prefer adding hosts to `~/.ssh/config` so native `ssh`/`rsync` share them; if you
+add one to `connections.json`, keep this Markdown file in sync.
 
 Do not store private key contents, passwords, passphrases, tokens, or other
 secrets here. Store only local private key file paths.

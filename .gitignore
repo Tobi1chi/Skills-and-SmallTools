@@ -1,3 +1,9 @@
 .DS_Store
 .venv
 __pycache__/
+
+# ssh-control local-only files
+ssh-control/.env
+ssh-control/keys/
+ssh-control/logs/
+ssh-control/state/
