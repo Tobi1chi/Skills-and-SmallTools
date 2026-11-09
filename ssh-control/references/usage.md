@@ -74,7 +74,8 @@ curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:47622/health
 and `HEAD /mcp` → 405). Same auth as above. Methods: `initialize` (echoes
 2024-11-05 / 2025-03-26 / 2025-06-18 / 2026-07-28), `notifications/*` → 202,
 `ping`, `tools/list`, `tools/call`. Tool results are text: output, `[stderr]`
-block, then one status line such as `[exit 0 · 105 ms]` or
+block, then one status line such as `[exit 0 · 105 ms · cwd /tmp]` (shell mode
+reports the shell's directory after the command; the HTTP/CLI result has `cwd`) or
 `[running · 407 ms · cursor 1 · phase build]`.
 
 | Tool | Arguments |

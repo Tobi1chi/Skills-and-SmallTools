@@ -100,7 +100,7 @@ class PersistentShellSession:
             f"eval {shlex.quote(command)} </dev/null\n"
             "__codex_status=$?\n"
             f"printf '{marker}ERR\\n' >&2\n"
-            f"printf '\\n{marker}:%s\\n' \"$__codex_status\"\n"
+            f"printf '\\n{marker}:%s:%s\\n' \"$__codex_status\" \"$PWD\"\n"
         )
 
     def execute(self, command, timeout=30):
@@ -122,15 +122,17 @@ class PersistentShellSession:
                         "exit_code": -1, "duration_ms": int((time.time() - started) * 1000),
                         "error": "ssh_write_failed"}
 
-            done_re = re.compile(re.escape(marker) + r":(-?\d+)\r?\n")
+            # POSIX shells append ":$PWD" (PowerShell does not); the window covers PATH_MAX.
+            done_re = re.compile(re.escape(marker) + r":(-?\d+)(?::([^\r\n]*))?\r?\n")
             err_re = re.compile(re.escape(marker) + r"ERR\r?\n")
-            window = len(marker) + 32
+            window = len(marker) + 32 + 4096
             dec_out = codecs.getincrementaldecoder("utf-8")("replace")
             dec_err = codecs.getincrementaldecoder("utf-8")("replace")
             out, err = "", ""
             out_scan = err_scan = 0
             dropped = [0, 0]
             exit_code = None
+            cwd = None
             stderr_done = False
             deadline = started + timeout
             while time.time() < deadline:
@@ -145,6 +147,7 @@ class PersistentShellSession:
                     match = done_re.search(out, max(0, out_scan - window))
                     if match:
                         exit_code = int(match.group(1))
+                        cwd = match.group(2)
                         out = out[:match.start()]
                         if out.endswith("\n"):
                             out = out[:-1]  # newline printed before the marker
@@ -178,6 +181,8 @@ class PersistentShellSession:
             self.last_used_at = time.time()
             result = {"command": command, "stdout": out, "stderr": err,
                       "exit_code": exit_code, "duration_ms": int((time.time() - started) * 1000)}
+            if cwd:
+                result["cwd"] = cwd
             if dropped[0] or dropped[1]:
                 result["output_truncated"] = {"stdout_chars_dropped": dropped[0],
                                               "stderr_chars_dropped": dropped[1]}

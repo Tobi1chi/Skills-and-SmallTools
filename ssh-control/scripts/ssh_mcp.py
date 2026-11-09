@@ -45,6 +45,7 @@ TOOLS = [
         "name": "ssh_exec",
         "description": ("Run a command on a host and wait for it. mode=shell (default) uses the alias's "
                         "persistent shell, so cd/export carry over between calls; stdin is /dev/null. "
+                        "The status line ends with the shell's cwd after the command. "
                         "mode=exec runs in a fresh /bin/sh channel and accepts cwd/env/stdin. Output keeps "
                         "the newest max_output characters per stream. Use ssh_job for long commands."),
         "inputSchema": {"type": "object", "required": ["alias", "cmd"], "properties": {
@@ -127,6 +128,8 @@ def _render(result, limit, extra=""):
         status.insert(0, state)
     if result.get("duration_ms") is not None:
         status.append(f"{result['duration_ms']} ms")
+    if result.get("cwd"):
+        status.append(f"cwd {result['cwd']}")
     for key in ("error", "shell_restarted"):
         if result.get(key):
             status.append(f"{key}: {result[key]}")

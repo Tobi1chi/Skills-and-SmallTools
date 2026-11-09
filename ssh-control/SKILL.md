@@ -23,8 +23,9 @@ available tools for `ssh-control` before considering anything else.
 ## Multi-step work
 
 - Issue one `ssh_exec` per step and read each result before the next. The shell
-  persists, so `cd` and `export` carry over; do not chain a whole procedure
-  into one `&&` command or re-`cd` every call.
+  persists, so `cd` and `export` carry over, and each status line ends with the
+  current `cwd`; do not chain a whole procedure into one `&&` command or re-`cd`
+  every call.
 - Use `mode: "exec"` only for isolated commands that need `cwd`/`env`/`stdin`.
 - Do not run `ssh host '…'` or `scripts/*.py` through the shell for routine
   work. Native ssh is for `rsync`/`scp` of large trees and for
