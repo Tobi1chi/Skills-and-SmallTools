@@ -238,7 +238,7 @@ class AcceptNewPolicy(paramiko.MissingHostKeyPolicy):
               file=sys.stderr, flush=True)
 
 
-def connect(config, timeout=None):
+def connect(config, timeout=None, password=None):
     """Open an authenticated SSHClient. Returns (client, proxy_sock_or_None)."""
     client = paramiko.SSHClient()
     known_hosts = Path(config["known_hosts"])
@@ -257,6 +257,7 @@ def connect(config, timeout=None):
             config["host"],
             port=config["port"],
             username=config["username"],
+            password=password,
             key_filename=key_paths or None,
             passphrase=config.get("passphrase"),
             allow_agent=not config["identities_only"],

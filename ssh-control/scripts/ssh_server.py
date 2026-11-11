@@ -19,7 +19,10 @@ import os
 import re
 import shlex
 import signal
+import secrets
+import subprocess
 import sys
+import tempfile
 import threading
 import time
 import uuid
@@ -32,6 +35,8 @@ from ssh_connect import ConnectError, connect, public_connection, resolve_all
 from ssh_execution import (JOB_ID_RE, OUTPUT_LIMIT, Job, cancel_detached, native_hint,
                            poll_detached, run_channel, start_detached, validate_body)
 from ssh_safety import dangerous_reason
+from ssh_admin import AdminSession
+from ssh_terminal import launch_terminal
 from ssh_token import ensure_token
 import ssh_mcp
 import ssh_sftp
@@ -44,7 +49,7 @@ LOCAL_HOSTNAMES = {"127.0.0.1", "localhost", "::1"}
 
 
 class PersistentShellSession:
-    def __init__(self, session_id, alias, config, shell="/bin/bash", connect_timeout=10):
+    def __init__(self, session_id, alias, config, shell="/bin/bash", connect_timeout=10, login_password=None):
         self.session_id = session_id
         self.alias = alias
         self.config = config
@@ -54,8 +59,11 @@ class PersistentShellSession:
         self.created_at = time.time()
         self.last_used_at = None
         self.lock = threading.Lock()
+        self.admin_lock = threading.Lock()
+        self.admin = None
+        self.admin_managed = False
         self.channel = None
-        self.client, self.proxy = connect(config, timeout=connect_timeout)
+        self.client, self.proxy = connect(config, timeout=connect_timeout, password=login_password)
         self._open_shell()
 
     def _open_shell(self):
@@ -204,6 +212,7 @@ class PersistentShellSession:
             return result
 
     def close(self):
+        self.close_admin()
         try:
             if self.channel is not None and not self.channel.closed:
                 self.channel.close()
@@ -214,6 +223,37 @@ class PersistentShellSession:
                     self.proxy.close()
                 except Exception:
                     pass
+
+    def admin_status(self):
+        with self.admin_lock:
+            active = bool(self.admin and self.admin.active() and self.transport_active())
+            return {"active": active, "expires_at": self.admin.expires_at if active else None}
+
+    def open_admin(self, password, log_dir, log_keep):
+        if self.is_powershell:
+            raise ValueError("admin sessions require a POSIX remote")
+        with self.admin_lock:
+            admin = AdminSession.open(self, password, log_dir, log_keep)
+            if self.admin:
+                self.admin.close()
+            self.admin = admin
+            self.admin_managed = True
+        return self.admin_status()
+
+    def close_admin(self):
+        with self.admin_lock:
+            if self.admin:
+                self.admin.close()
+                self.admin = None
+
+    def get_admin(self):
+        with self.admin_lock:
+            return self.admin if self.admin and self.admin.active() and self.transport_active() else None
+
+    def admin_state(self):
+        with self.admin_lock:
+            active = self.admin if self.admin and self.admin.active() and self.transport_active() else None
+            return active, self.admin_managed
 
     def public_state(self):
         return {
@@ -226,6 +266,7 @@ class PersistentShellSession:
             "shell_alive": self.shell_alive(),
             "created_at": self.created_at,
             "last_used_at": self.last_used_at,
+            "admin": self.admin_status(),
             "config_version": getattr(self, "config_version", 1),
         }
 
@@ -240,6 +281,7 @@ class SessionRegistry:
         self.versions = {alias: 1 for alias in self.connections}
         self.reload_lock = threading.Lock()
         self.jobs = {}
+        self.approvals = {}
         self._restore_jobs()
 
     # ---------------------------------------------------------------- sessions
@@ -290,7 +332,8 @@ class SessionRegistry:
                 self.connections = connections
             return dict(added=added, modified=modified, removed=removed)
 
-    def get_or_create(self, alias, shell="/bin/bash", connect_timeout=10, force_new=False):
+    def get_or_create(self, alias, shell="/bin/bash", connect_timeout=10, force_new=False,
+                      login_password=None, expected_version=None):
         with self.lock:
             missing = alias not in self.connections
         if missing:
@@ -301,12 +344,14 @@ class SessionRegistry:
                 raise KeyError("unknown connection alias")
             config = dict(self.connections[alias])
             version = self.versions[alias]
+            if expected_version is not None and version != expected_version:
+                raise ValueError("connection configuration changed; request login again")
             key = (alias, shell, version)
             existing = self.sessions.get(self.alias_index.get(key))
             if not force_new and existing and existing.transport_active():
                 return existing, False
         # SSH connect/open/startup must never hold the registry lock.
-        session = PersistentShellSession(uuid.uuid4().hex, alias, config, shell, connect_timeout)
+        session = PersistentShellSession(uuid.uuid4().hex, alias, config, shell, connect_timeout, login_password)
         session.config_version = version
         with self.lock:
             winner = self.sessions.get(self.alias_index.get(key))
@@ -373,7 +418,17 @@ class SessionRegistry:
         reason = self.check_command(body["cmd"])
         if reason:
             raise PermissionError(reason)
+        return self._start_job(session, body, detached)
+
+    def _start_job(self, session, body, detached=False, admin_required=False):
         validate_body(body)
+        admin, managed = session.admin_state() if body.get("sudo") and "sudo_password" not in body else (None, False)
+        if managed and not admin:
+            raise RuntimeError("admin_session_expired_or_closed; request a new admin session")
+        if admin_required and not admin:
+            raise RuntimeError("admin_session_expired")
+        if admin:
+            detached = False
         job = Job(detached=detached, alias=session.alias if detached else None)
         if detached:
             start_detached(session, body, job)   # raises before the job is registered
@@ -383,8 +438,248 @@ class SessionRegistry:
             threading.Thread(target=poll_detached, args=(job, self.session_for_alias), daemon=True).start()
             return job
         self._add_job(job)
-        threading.Thread(target=run_channel, args=(session, dict(body), job), daemon=True).start()
+        target = admin.run if admin else run_channel
+        args = (dict(body), job) if admin else (session, dict(body), job)
+        threading.Thread(target=target, args=args, daemon=True).start()
         return job
+
+    def request_approval(self, alias, command, explanation, sudo=False, cwd=None):
+        if not isinstance(command, str) or not command.strip():
+            raise ValueError("cmd is required")
+        if not isinstance(explanation, str) or not explanation.strip():
+            raise ValueError("explanation is required")
+        if cwd is not None and (not isinstance(cwd, str) or not cwd.startswith("/")):
+            raise ValueError("cwd must be an absolute remote path")
+        session = self.get_or_create(alias)[0]
+        request_id, ticket = uuid.uuid4().hex, secrets.token_urlsafe(32)
+        body = {"cmd": command, "sudo": bool(sudo)}
+        if cwd:
+            body["cwd"] = cwd
+        validate_body(body)
+        request = {"id": request_id, "ticket": ticket, "kind": "command", "session_id": session.session_id,
+                   "alias": session.alias, "host": session.config["host"],
+                   "user": session.config["username"], "port": session.config["port"], "body": body,
+                   "explanation": explanation, "state": "pending", "created": time.time(),
+                   "job_id": None, "reason": dangerous_reason(command),
+                   "use_admin": bool(sudo and session.get_admin())}
+        return self._open_confirmation(request)
+
+    def request_admin(self, alias, log_dir=None, log_keep=50):
+        if not isinstance(log_dir, str) or not os.path.isabs(log_dir):
+            raise ValueError('log_dir must be an absolute directory in the local workspace')
+        if not isinstance(log_keep, int) or isinstance(log_keep, bool) or log_keep < 1:
+            raise ValueError('log_keep must be a positive integer')
+        session = self.get_or_create(alias)[0]
+        request = {"id": uuid.uuid4().hex, "ticket": secrets.token_urlsafe(32), "kind": "admin",
+                   "session_id": session.session_id, "alias": session.alias, "host": session.config["host"],
+                   "user": session.config["username"], "port": session.config["port"],
+                   "state": "pending", "created": time.time(), "job_id": None, "reason": None,
+                   "log_dir": log_dir, "log_keep": log_keep}
+        return self._open_confirmation(request)
+
+    def admin_for_alias(self, alias, close=False):
+        with self.lock:
+            if close:
+                for item in self.approvals.values():
+                    if item["kind"] == "admin" and item["alias"] == alias and item["state"] in ("pending", "connecting", "active"):
+                        item["state"] = "closed"
+            version = self.versions.get(alias)
+            session = self.sessions.get(self.alias_index.get((alias, '/bin/bash', version)))
+        if not session or not session.transport_active():
+            return {'alias': alias, 'active': False, 'expires_at': None}
+        if close:
+            session.close_admin()
+        return {'alias': alias, **session.admin_status()}
+
+    def submit_admin(self, request_id, ticket, password):
+        self.approval_status(request_id, ticket)
+        with self.lock:
+            item = self.approvals[request_id]
+            if item["kind"] != "admin" or item["state"] != "pending":
+                raise ValueError("admin request is no longer pending")
+            if password is None:
+                item["state"] = "rejected"
+                session = None
+            else:
+                item["state"] = "connecting"
+                session = self.sessions.get(item["session_id"])
+        if password is None:
+            return self.approval_status(request_id)
+        if not session or not session.transport_active():
+            with self.lock:
+                item["state"] = "session_closed"
+            return self.approval_status(request_id)
+        try:
+            admin = session.open_admin(password, item['log_dir'], item['log_keep'])
+        except PermissionError:
+            with self.lock:
+                item["state"] = "admin_failed"
+            raise RuntimeError("sudo_auth_failed") from None
+        except Exception:
+            with self.lock:
+                item["state"] = "admin_failed"
+            raise
+        finally:
+            password = None
+        with self.lock:
+            cancelled = item["state"] != "connecting"
+            if not cancelled:
+                item["state"] = "active"
+                item["expires_at"] = admin["expires_at"]
+        if cancelled:
+            session.close_admin()
+        return self.approval_status(request_id)
+
+    def request_login(self, alias, env_var=None):
+        if env_var is not None and not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", env_var):
+            raise ValueError("env_var must be an environment variable name")
+        with self.lock:
+            config = dict(self.connections.get(alias) or {})
+            version = self.versions.get(alias)
+        if not config:
+            raise KeyError("unknown connection alias")
+        request = {"id": uuid.uuid4().hex, "ticket": secrets.token_urlsafe(32), "kind": "login",
+                   "alias": alias, "host": config["host"], "user": config["username"], "port": config["port"],
+                   "version": version, "env_var": env_var, "state": "pending", "created": time.time(),
+                   "job_id": None, "reason": None}
+        return self._open_confirmation(request)
+
+    def _open_confirmation(self, request):
+        request_id, ticket = request["id"], request["ticket"]
+        fd, ticket_path = tempfile.mkstemp(prefix="ssh-control-approval-", suffix=".ticket")
+        with os.fdopen(fd, "w") as f:
+            f.write(ticket)
+        with self.lock:
+            self.approvals[request_id] = request
+        launcher_path = None
+        try:
+            helper = SKILL_DIR / "scripts" / "ssh_approval_terminal.py"
+            process, launcher_path = launch_terminal(helper, request_id, ticket_path, self.approval_port)
+        except Exception:
+            with self.lock:
+                request["state"] = "launch_failed"
+            try:
+                os.unlink(ticket_path)
+            except FileNotFoundError:
+                pass
+            if launcher_path:
+                try:
+                    os.unlink(launcher_path)
+                except FileNotFoundError:
+                    pass
+            raise RuntimeError("Could not open a terminal; check the graphical session and terminal installation")
+        def monitor_terminal():
+            try:
+                process.communicate(timeout=610)
+                failed = process.returncode != 0
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.communicate()
+                failed = True
+            if failed:
+                with self.lock:
+                    if request["state"] == "pending":
+                        request["state"] = "launch_failed"
+                try:
+                    os.unlink(ticket_path)
+                except FileNotFoundError:
+                    pass
+                if launcher_path:
+                    try:
+                        os.unlink(launcher_path)
+                    except FileNotFoundError:
+                        pass
+        threading.Thread(target=monitor_terminal, daemon=True).start()
+        return self.approval_status(request_id)
+
+    def approval_status(self, request_id, ticket=None):
+        with self.lock:
+            item = self.approvals.get(request_id)
+            if not item:
+                raise ValueError("approval not found")
+            if item["state"] == "pending" and time.time() - item["created"] > 600:
+                item["state"] = "expired"
+            if item["kind"] == "admin" and item["state"] == "active":
+                session = self.sessions.get(item["session_id"])
+                if not session or not session.get_admin():
+                    item["state"] = "expired"
+            result = {k: item[k] for k in ("id", "kind", "alias", "host", "user", "port", "state", "job_id", "reason")}
+            if item.get("expires_at"):
+                result["expires_at"] = item["expires_at"]
+            if ticket is not None:
+                if not hmac.compare_digest(ticket, item["ticket"]):
+                    raise PermissionError("invalid approval ticket")
+                if item["kind"] == "command":
+                    result.update(cmd=item["body"]["cmd"], sudo=item["body"]["sudo"],
+                                  cwd=item["body"].get("cwd"), explanation=item["explanation"],
+                                  use_admin=item["use_admin"])
+                elif item["kind"] == "login":
+                    result["env_var"] = item["env_var"]
+                elif item["kind"] == "admin":
+                    result.update(log_dir=item['log_dir'], log_keep=item['log_keep'])
+            return result
+
+    def decide_approval(self, request_id, ticket, approved, password=None):
+        self.approval_status(request_id, ticket)
+        with self.lock:
+            item = self.approvals[request_id]
+            if item["state"] != "pending":
+                raise ValueError("approval is no longer pending")
+            if item["kind"] != "command":
+                raise ValueError("not a command approval")
+            item["state"] = "starting" if approved else "rejected"
+            session = self.sessions.get(item["session_id"])
+            body = dict(item["body"])
+        if not approved:
+            return self.approval_status(request_id)
+        if not session or not session.transport_active():
+            with self.lock:
+                item["state"] = "session_closed"
+            return self.approval_status(request_id)
+        if item["use_admin"] and not session.get_admin():
+            with self.lock:
+                item["state"] = "admin_expired"
+            return self.approval_status(request_id)
+        if password:
+            body["sudo_password"] = password
+        try:
+            job = self._start_job(session, body, admin_required=item["use_admin"])
+        except Exception:
+            with self.lock:
+                item["state"] = "start_failed"
+            raise
+        finally:
+            body.pop("sudo_password", None)
+        with self.lock:
+            item["job_id"] = job.job_id
+            item["state"] = "started"
+        return self.approval_status(request_id)
+
+    def submit_login(self, request_id, ticket, password):
+        self.approval_status(request_id, ticket)
+        with self.lock:
+            item = self.approvals[request_id]
+            if item["state"] != "pending" or item["kind"] != "login":
+                raise ValueError("login request is no longer pending")
+            if password is None:
+                item["state"] = "rejected"
+                return {k: item[k] for k in ("id", "kind", "alias", "host", "user", "port", "state", "job_id", "reason")}
+            if not isinstance(password, str) or not password:
+                raise ValueError("password is required")
+            item["state"] = "connecting"
+            alias, version = item["alias"], item["version"]
+        try:
+            session, _ = self.get_or_create(alias, login_password=password, expected_version=version)
+        except Exception:
+            with self.lock:
+                item["state"] = "login_failed"
+            raise
+        finally:
+            password = None
+        with self.lock:
+            item["session_id"] = session.session_id
+            item["state"] = "connected"
+        return self.approval_status(request_id)
 
     def ensure_attached(self, job):
         """Resume following a detached job (after a drop or a service restart)."""
@@ -560,6 +855,13 @@ class SSHRequestHandler(BaseHTTPRequestHandler):
                 items = list(self.registry.connections.values())
             self._send_json(HTTPStatus.OK, {"connections": [public_connection(c) for c in items]})
             return
+        match = re.fullmatch(r"/approvals/([0-9a-f]{32})", path)
+        if match:
+            try:
+                self._send_json(HTTPStatus.OK, self.registry.approval_status(match.group(1)))
+            except ValueError:
+                self._error(HTTPStatus.NOT_FOUND, "approval not found")
+            return
         self._error(HTTPStatus.NOT_FOUND, "not found")
 
     def do_POST(self):
@@ -618,6 +920,45 @@ class SSHRequestHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _dispatch_post(self, path, body):
+        if path == "/admins":
+            action, alias = body.get("action"), str(body.get("alias") or "")
+            if action == "request":
+                result = self.registry.request_admin(alias, body.get('log_dir'), body.get('log_keep', 50))
+            elif action in ("status", "close"):
+                result = self.registry.admin_for_alias(alias, close=action == "close")
+            else:
+                raise ValueError("action must be request, status or close")
+            self._send_json(HTTPStatus.OK, result)
+            return
+        if path == "/approvals":
+            result = self.registry.request_approval(str(body.get("alias") or ""), body.get("cmd"),
+                                                    body.get("explanation"), body.get("sudo", False),
+                                                    body.get("cwd"))
+            self._send_json(HTTPStatus.CREATED, result)
+            return
+        if path == "/logins":
+            result = self.registry.request_login(str(body.get("alias") or ""), body.get("env_var"))
+            self._send_json(HTTPStatus.CREATED, result)
+            return
+        match = re.fullmatch(r"/approvals/([0-9a-f]{32})/(details|decision|login|admin)", path)
+        if match:
+            ticket = body.get("ticket")
+            if not isinstance(ticket, str):
+                raise ValueError("ticket required")
+            if match.group(2) == "details":
+                result = self.registry.approval_status(match.group(1), ticket)
+            elif match.group(2) == "login":
+                result = self.registry.submit_login(match.group(1), ticket, body.get("password"))
+            elif match.group(2) == "admin":
+                result = self.registry.submit_admin(match.group(1), ticket, body.get("password"))
+            else:
+                if body.get("decision") not in ("approve", "reject"):
+                    raise ValueError("decision must be approve or reject")
+                result = self.registry.decide_approval(match.group(1), ticket,
+                                                       body["decision"] == "approve", body.get("password"))
+            self._send_json(HTTPStatus.OK, result)
+            return
+
         if path == "/connections/reload":
             try:
                 self._send_json(HTTPStatus.OK, self.registry.reload())
@@ -705,8 +1046,8 @@ class SSHRequestHandler(BaseHTTPRequestHandler):
             detached = (not body.get("attached") and body.get("sudo_password") is None
                         and not session.is_powershell)
             job = self.registry.start_job(session, body, detached=detached)
-            payload = {"job_id": job.job_id, "state": "running", "detached": detached}
-            hint = native_hint(session.alias, job.job_id) if detached else None
+            payload = {"job_id": job.job_id, "state": "running", "detached": job.detached}
+            hint = native_hint(session.alias, job.job_id) if job.detached else None
             if hint:
                 payload["native"] = hint
             self._send_json(HTTPStatus.ACCEPTED, payload)
@@ -751,6 +1092,7 @@ class SSHHTTPServer(ThreadingHTTPServer):
     def __init__(self, server_address, handler_class, registry, allowed_hosts):
         super().__init__(server_address, handler_class)
         self.registry = registry
+        registry.approval_port = self.server_address[1]
         self.mcp = ssh_mcp.MCPServer(registry)
         self.allowed_hosts = allowed_hosts
 

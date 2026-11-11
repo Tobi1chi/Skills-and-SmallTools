@@ -19,6 +19,9 @@ available tools for `ssh-control` before considering anything else.
 | Builds, installs, downloads, anything longer or open-ended | `ssh_job` start → wait (pass back `cursor`) |
 | Copy files | `ssh_transfer` (absolute local path) |
 | Fresh login (group changes, stuck shell) | `ssh_session_reset` |
+| SSH password login | `ssh_password_login` request → user enters a password or environment variable in Terminal → status |
+| Human confirmation of a high-risk command | `ssh_approval` request → user reviews and responds in Terminal → status, then `ssh_job` |
+| Temporary admin access | `ssh_admin_session` request with absolute workspace `log_dir` and optional `log_keep` → user approves and enters sudo password → status; close when finished |
 
 ## Multi-step work
 
@@ -35,10 +38,13 @@ available tools for `ssh-control` before considering anything else.
 
 ## Fallbacks (only when MCP cannot do it)
 
-- **Password sudo:** MCP `sudo` is passwordless (`sudo -n`). On
+- **Password sudo:** A user-approved 15-minute admin session lets MCP `sudo: true`
+  run on its bound SSH session without re-entering the password. Without it MCP uses
+  `sudo -n`. On
   `sudo_password_required`, run `uv run python scripts/ssh_client.py exec --alias A
-  --sudo --sudo-password-env VAR --cmd '…'` from the skill directory. Never put a
-  password in a tool argument or command line.
+  --sudo --sudo-password-env VAR --cmd '…'` from the skill directory. For an approved
+  high-risk command the Terminal prompts for sudo password after confirmation.
+  Never put a password in a tool argument or command line.
 - **Tools missing or connection refused:** follow "Service operations" in
   [usage.md](references/usage.md); `ssh_client.py` is the same service via CLI,
   `scripts/run_command.py` etc. work without it (`uv run --with paramiko python`).
@@ -52,10 +58,33 @@ available tools for `ssh-control` before considering anything else.
   real host may be off and another device answering on its IP).
 - Never print, paste or store private keys, passwords, passphrases, or the
   service token (`.env` in this folder).
-- Get explicit user confirmation before destructive operations: broad `rm -rf`,
+- Get explicit user authorization before preparing destructive operations: broad `rm -rf`,
   reboot/shutdown, disk formatting or overwrites, editing sudoers/passwd/shadow,
-  stopping critical services, production database writes. The service also
-  rejects obvious destructive commands; never rephrase one to slip past it.
+  stopping critical services, production database writes. For commands caught by the
+  service, use `ssh_approval` with a concrete command and explanation. The user must
+  personally enter Y in the local Terminal; never approve for them, bypass or rephrase
+  the command. Approval is single-use and expires after ten minutes; a closed terminal
+  or a lost session never counts as approval. A command may be approved only for the
+  host and arguments shown in the Terminal. Poll its returned job; never replay a job
+  with unknown outcome.
+- When password login is needed, ask the user to enter it or choose an environment
+  variable in the Terminal (`ssh_password_login`); never read or print the value in
+  chat. If these new tools are not yet available in the current MCP client, use the
+  documented `ssh_client.py login` / `approval` commands for this service.
+- An admin session is bound to the SSH session, expires 15 minutes after activation,
+  and can be closed early with `ssh_admin_session` action `close`. It accepts sudo
+  commands only; other commands retain their normal user identity. High-risk commands
+  still require their own `ssh_approval`. Admin jobs are attached, not detached;
+  disconnect, cancellation or expiry may leave an already-started remote process
+  running, so inspect unknown outcomes and do not replay automatically. If the MCP
+  client has not loaded the new tool, use the `ssh_client.py admin` fallback.
+  Give `log_dir` as an absolute path inside the current workspace (for example its
+  `work/ssh-control-logs` directory); `log_keep` is the number of recent task logs,
+  default 50 and adjustable by the agent. Each task writes a local JSONL log and
+  the returned job status shows its path. Background output stays in the original
+  task's log. Active logs are kept until their output streams close; older inactive
+  logs are moved to Trash when the limit is exceeded. Do not put secrets in commands
+  or output. Remote temporary FIFOs carry output without storing remote log files.
 - Report the host, command, relevant output, and exit code or job state; say
   when output was truncated.
 

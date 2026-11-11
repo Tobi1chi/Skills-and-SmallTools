@@ -42,6 +42,7 @@ class Job:
         self.condition = threading.Condition()
         self.phase_buffer = ""
         self.cancel_event = threading.Event()
+        self.log_path = None
         self.on_finish = None
         # Detached-job bookkeeping.
         self.detached = detached
@@ -96,6 +97,8 @@ class Job:
                           exit_code=self.exit_code, error=self.error, phase=self.phase,
                           phase_version=self.phase_version, cursor=self.cursor,
                           dropped_before=base, truncated=(base > (cursor or 0)))
+            if self.log_path:
+                result['log_path'] = self.log_path
             for stream in ("stdout", "stderr"):
                 value = "".join(e[2] for e in events if e[1] == stream)
                 result[stream] = value if cursor is not None else value[-16384:]

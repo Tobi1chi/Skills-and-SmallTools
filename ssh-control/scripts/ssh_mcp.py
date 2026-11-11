@@ -6,6 +6,7 @@ share sessions, detached jobs, safety checks and host-key verification.
 Results are compact text (output, then one status line) to keep context small.
 """
 import os
+import json
 
 from ssh_connect import ConnectError, public_connection
 from ssh_execution import native_hint
@@ -20,8 +21,9 @@ INSTRUCTIONS = (
     "SSH to hosts by alias (every Host in ~/.ssh/config plus the skill's connections.json). "
     "ssh_exec keeps one persistent shell per alias (cd/export persist); use mode=exec for an "
     "isolated /bin/sh with cwd/env/stdin. Use ssh_job for anything that may exceed ~30s: it runs "
-    "detached on the remote host and survives disconnects. Dangerous commands are rejected; "
-    "ask the user before destructive operations. Never print secrets."
+    "detached on the remote host and survives disconnects, except temporary-admin jobs are attached. "
+    "Dangerous commands require an "
+    "explicit user request and ssh_approval terminal confirmation. Never print secrets."
 )
 
 _EXEC_PROPS = {
@@ -29,10 +31,44 @@ _EXEC_PROPS = {
     "env": {"type": "object", "additionalProperties": {"type": "string"},
             "description": "Extra environment variables (mode=exec / jobs only). Never secrets."},
     "stdin": {"type": "string", "description": "Data fed to stdin (mode=exec / jobs only)."},
-    "sudo": {"type": "boolean", "description": "Run via passwordless `sudo -n`. Password sudo is CLI-only."},
+    "sudo": {"type": "boolean", "description": "Run with the active temporary admin session; otherwise sudo -n if no temporary session has been ended or expired."},
 }
 
 TOOLS = [
+    {
+        "name": "ssh_admin_session",
+        "description": "Request a 15-minute admin session in a local terminal, inspect its status, or close it. High-risk commands still require ssh_approval.",
+        "inputSchema": {"type": "object", "required": ["action"], "properties": {
+            "action": {"type": "string", "enum": ["request", "status", "close"]},
+            "alias": {"type": "string"}, "request_id": {"type": "string"},
+            "log_dir": {"type": "string", "description": "Absolute local workspace directory for per-task output logs; required for request."},
+            "log_keep": {"type": "integer", "minimum": 1, "default": 50, "description": "Number of recent task logs to retain."},
+        }},
+        "annotations": {"openWorldHint": True},
+    },
+    {
+        "name": "ssh_password_login",
+        "description": "Open a local Terminal for SSH password login or check the login request. The user enters a password or an environment variable name in Terminal.",
+        "inputSchema": {"type": "object", "required": ["action"], "properties": {
+            "action": {"type": "string", "enum": ["request", "status"]},
+            "alias": {"type": "string"},
+            "env_var": {"type": "string", "description": "Optional name of a user-selected environment variable, never its value."},
+            "request_id": {"type": "string"},
+        }},
+        "annotations": {"openWorldHint": True},
+    },
+    {
+        "name": "ssh_approval",
+        "description": "Request one human-approved command in a local Terminal window, or check its status. Never approve on the user's behalf.",
+        "inputSchema": {"type": "object", "required": ["action"], "properties": {
+            "action": {"type": "string", "enum": ["request", "status"]},
+            "alias": {"type": "string"}, "cmd": {"type": "string"},
+            "explanation": {"type": "string", "description": "Explain the exact operation and its consequences."},
+            "sudo": {"type": "boolean"}, "cwd": {"type": "string"},
+            "approval_id": {"type": "string"},
+        }},
+        "annotations": {"openWorldHint": True},
+    },
     {
         "name": "ssh_hosts",
         "description": "List SSH aliases this service can reach and the currently open sessions.",
@@ -130,6 +166,8 @@ def _render(result, limit, extra=""):
         status.append(f"{result['duration_ms']} ms")
     if result.get("cwd"):
         status.append(f"cwd {result['cwd']}")
+    if result.get("log_path"):
+        status.append(f"log {result['log_path']}")
     for key in ("error", "shell_restarted"):
         if result.get(key):
             status.append(f"{key}: {result[key]}")
@@ -226,6 +264,37 @@ class MCPServer:
 
     # ------------------------------------------------------------ tools
 
+    def tool_ssh_admin_session(self, args):
+        action = args.get('action')
+        if action == 'request':
+            result = self.registry.request_admin(str(args.get('alias') or ''), args.get('log_dir'), args.get('log_keep', 50))
+        elif action == 'status' and args.get('request_id'):
+            result = self.registry.approval_status(str(args['request_id']))
+        elif action in ('status', 'close'):
+            result = self.registry.admin_for_alias(str(args.get('alias') or ''), close=action == 'close')
+        else:
+            raise ToolError('action must be request, status or close')
+        return json.dumps(result, ensure_ascii=False)
+
+    def tool_ssh_password_login(self, args):
+        if args.get("action") == "request":
+            result = self.registry.request_login(str(args.get("alias") or ""), args.get("env_var"))
+        elif args.get("action") == "status":
+            result = self.registry.approval_status(str(args.get("request_id") or ""))
+        else:
+            raise ToolError("action must be request or status")
+        return json.dumps(result, ensure_ascii=False)
+
+    def tool_ssh_approval(self, args):
+        if args.get("action") == "request":
+            result = self.registry.request_approval(str(args.get("alias") or ""), args.get("cmd"),
+                                                    args.get("explanation"), args.get("sudo", False), args.get("cwd"))
+        elif args.get("action") == "status":
+            result = self.registry.approval_status(str(args.get("approval_id") or ""))
+        else:
+            raise ToolError("action must be request or status")
+        return json.dumps(result, ensure_ascii=False)
+
     def _session(self, alias):
         if not alias:
             raise ToolError("alias is required")
@@ -293,8 +362,8 @@ class MCPServer:
             session = self._session(args.get("alias"))
             detached = not args.get("attached") and not session.is_powershell
             job = reg.start_job(session, _exec_body(args), detached=detached)
-            hint = native_hint(session.alias, job.job_id) if detached else None
-            text = f"started job {job.job_id} ({'detached' if detached else 'attached'}); next: ssh_job wait cursor=0"
+            hint = native_hint(session.alias, job.job_id) if job.detached else None
+            text = f"started job {job.job_id} ({'detached' if job.detached else 'attached'}); next: ssh_job wait cursor=0"
             return text + (f"\nnative: {hint}" if hint else "")
         job_id = str(args.get("job_id") or "")
         if not job_id:

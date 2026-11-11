@@ -67,6 +67,26 @@ def main():
     sub.add_parser('health')
     sub.add_parser('connections')
     sub.add_parser('reload')
+    admin = sub.add_parser('admin')
+    admin.add_argument('admin_action', choices=['request', 'status', 'close'])
+    admin.add_argument('--alias', required=True)
+    admin.add_argument('--log-dir', help='absolute directory in the local workspace; required for request')
+    admin.add_argument('--log-keep', type=int, default=50, help='number of recent admin task logs to retain')
+    approval = sub.add_parser('approval').add_subparsers(dest='approval_action', required=True)
+    approval_request = approval.add_parser('request')
+    approval_request.add_argument('--alias', required=True)
+    approval_request.add_argument('--cmd', required=True)
+    approval_request.add_argument('--explanation', required=True)
+    approval_request.add_argument('--sudo', action='store_true')
+    approval_request.add_argument('--cwd')
+    approval_status = approval.add_parser('status')
+    approval_status.add_argument('request_id')
+    login = sub.add_parser('login').add_subparsers(dest='login_action', required=True)
+    login_request = login.add_parser('request')
+    login_request.add_argument('--alias', required=True)
+    login_request.add_argument('--env-var')
+    login_status = login.add_parser('status')
+    login_status.add_argument('request_id')
     run = sub.add_parser('exec')
     jobs = sub.add_parser('jobs').add_subparsers(dest='job_action', required=True)
     start = jobs.add_parser('start')
@@ -107,6 +127,20 @@ def main():
         result = request(args.url, 'GET', '/' + args.action)
     elif args.action == 'reload':
         result = request(args.url, 'POST', '/connections/reload', {})
+    elif args.action == 'admin':
+        result = request(args.url, 'POST', '/admins', dict(action=args.admin_action, alias=args.alias,
+                                                          log_dir=args.log_dir, log_keep=args.log_keep))
+    elif args.action == 'approval':
+        if args.approval_action == 'request':
+            result = request(args.url, 'POST', '/approvals', dict(alias=args.alias, cmd=args.cmd,
+                             explanation=args.explanation, sudo=args.sudo, cwd=args.cwd))
+        else:
+            result = request(args.url, 'GET', '/approvals/' + args.request_id)
+    elif args.action == 'login':
+        if args.login_action == 'request':
+            result = request(args.url, 'POST', '/logins', dict(alias=args.alias, env_var=args.env_var))
+        else:
+            result = request(args.url, 'GET', '/approvals/' + args.request_id)
     elif args.action == 'jobs' and args.job_action == 'list':
         result = request(args.url, 'GET', '/jobs')
     elif args.action == 'jobs' and args.job_action == 'attach':

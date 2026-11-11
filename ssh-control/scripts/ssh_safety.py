@@ -59,6 +59,8 @@ def _segments(command):
             words = shlex.split(part, comments=True)
         except ValueError:
             words = part.split()
+        if len(words) > 1 and words[0] == "command" and words[1] in ("-v", "-V"):
+            continue  # POSIX command lookup does not execute the named program.
         # Drop wrappers (with their flags/arguments) and VAR=value assignments.
         while words:
             word = words[0]

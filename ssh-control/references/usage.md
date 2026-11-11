@@ -9,6 +9,13 @@ only); the server still requires `uv run --with paramiko python`.
 uv run python scripts/ssh_client.py health
 uv run python scripts/ssh_client.py connections
 uv run python scripts/ssh_client.py reload
+uv run python scripts/ssh_client.py admin request --alias example --log-dir /absolute/workspace/work/ssh-control-logs --log-keep 50
+uv run python scripts/ssh_client.py admin status --alias example
+uv run python scripts/ssh_client.py admin close --alias example
+uv run python scripts/ssh_client.py login request --alias example --env-var MY_SSH_PASSWORD
+uv run python scripts/ssh_client.py login status REQUEST_ID
+uv run python scripts/ssh_client.py approval request --alias example --sudo --cmd 'COMMAND' --explanation 'WHAT IT WILL DO'
+uv run python scripts/ssh_client.py approval status REQUEST_ID
 uv run python scripts/ssh_client.py exec --alias example --cmd 'cd /tmp; pwd'
 uv run python scripts/ssh_client.py exec --alias example --mode exec --cwd /tmp --env NAME=value --cmd 'printf "$NAME"; cat' --stdin < input.txt
 uv run python scripts/ssh_client.py exec --alias example --force-new --cmd 'id'
@@ -42,6 +49,65 @@ never use it or `--cmd` to pass passwords. Provision the sudo password in the
 client environment through an approved secret source; do not print it. The
 LaunchAgent need not inherit that variable. Missing variables fail locally.
 The client never starts/restarts a service and never retries a submitted command.
+
+## Terminal confirmation and password login
+
+`ssh_password_login` and `ssh_approval` also have `request` and `status` actions.
+Request returns an ID and opens a desktop terminal: Terminal on macOS, a new console
+on Windows, or an installed supported terminal emulator on Linux. Linux requires a
+graphical desktop and one of x-terminal-emulator, GNOME Terminal, Konsole, XFCE
+Terminal, Kitty, Alacritty or xterm. The login prompt accepts a password
+with hidden input, or the name of an environment variable. An optional `env_var`
+preselects that name, never its value. If the variable is absent from the Terminal
+environment, macOS/Linux can source the user's `.zshrc` or `.bashrc` (according to
+the user's shell) with output suppressed; Windows also checks user and system
+environment variables. Sourcing executes that file's shell code.
+The password is supplied to the SSH transport in memory; it is not saved in the
+connection configuration or returned to the agent. A successful login is reused
+by existing MCP tools until its SSH session closes. For a new or closed session,
+repeat the login request. Unknown or changed host keys follow the normal host-key
+policy; a mismatch must never be bypassed.
+
+An approval request binds one existing session and one command, its sudo choice,
+working directory and explanation. Terminal displays those details; only a human
+typing Y executes it. A sudo password can be entered invisibly after confirmation,
+or left blank for passwordless sudo. N, Enter, cancellation, expiry (10 minutes),
+or a closed SSH session do not execute it. A started request returns a job ID; use
+`ssh_job` or `jobs status/wait` to observe it. An approval is single-use. It is an
+interactive safeguard for trusted local clients, not a security boundary against
+other code running as the same macOS user, which can access the local service and
+its temporary approval ticket. A logged-in graphical macOS session is required;
+if Terminal cannot open, the request fails without executing.
+
+Approval jobs are attached to the SSH connection. If the service or connection
+goes away, their outcome can be unknown; inspect remote state rather than retrying.
+
+`ssh_admin_session` request opens the same terminal and asks the user to confirm
+and enter the remote sudo password. It establishes a root shell on the existing SSH
+transport; the password is not saved. `sudo: true` then uses that shell for up to
+15 minutes from activation. `status` reports expiration and `close` revokes early.
+Commands are serialized; sudo jobs are attached even if detached was requested.
+After expiration, disconnect, or close no further commands can start on that shell.
+For that SSH session, later passwordless sudo requests fail closed until a new
+admin session is opened, even if the remote sudo timestamp cache is still valid.
+An already-started remote process may outlive channel closure: inspect unknown
+results. High-risk commands still need their own terminal approval. The approval
+uses the active admin session without asking for the password again; if the session
+expires before approval, request a new session and submit a new approval.
+
+Each admin request must specify an absolute local workspace `log_dir`; `log_keep`
+sets the number of recent task logs (default 50). One local JSONL file per task
+contains its host, command, cwd and stdout/stderr chunks; the job snapshot includes
+`log_path`. Output from a background child stays attached to that task's log even
+after its foreground shell exits, while its stream remains open. Active logs are
+not pruned; when output finishes, older logs beyond the limit are moved to Trash
+using `trash` or `trash-put`. If neither command is available, retention cannot
+prune and a new task that needs pruning fails before its command is sent. Local
+logs may contain sensitive command output. Temporary remote FIFOs carry output;
+no remote output log files are created. A disconnect can leave FIFO endpoints in
+the remote temporary directory. Each still-running background output stream uses
+an SSH channel, so remote SSH session limits apply. A service restart or lost SSH
+connection ends capture; a surviving background process can continue remotely.
 
 `exec --mode shell` preserves cwd/env in the persistent shell; use shell commands
 to change them. `exec --mode exec` and all sudo/jobs calls use separate POSIX
@@ -81,10 +147,13 @@ reports the shell's directory after the command; the HTTP/CLI result has `cwd`) 
 | Tool | Arguments |
 | --- | --- |
 | `ssh_hosts` | `reload` |
-| `ssh_exec` | `alias`, `cmd`, `mode` (shell/exec), `timeout` (30, max 600), `max_output` (20000, keeps the tail), exec-only `cwd`/`env`/`stdin`, `sudo` (`sudo -n` only) |
+| `ssh_exec` | `alias`, `cmd`, `mode` (shell/exec), `timeout` (30, max 600), `max_output` (20000, keeps the tail), exec-only `cwd`/`env`/`stdin`, `sudo` (active admin session or `sudo -n`) |
 | `ssh_job` | `action` start/wait/status/cancel/list/attach, `alias`, `cmd`, `job_id`, `cursor`, `timeout` (≤50), `attached`, `cwd`/`env`/`stdin`/`sudo`, `max_output` |
 | `ssh_transfer` | `alias`, `direction` upload/download, absolute `local`, `remote`, `recursive` |
 | `ssh_session_reset` | `alias` (closes its sessions; detached jobs keep running) |
+| `ssh_password_login` | `action` request/status, `alias`, optional `env_var`, or `request_id` |
+| `ssh_approval` | `action` request/status, `alias`, `cmd`, `explanation`, optional `sudo`/`cwd`, or `approval_id` |
+| `ssh_admin_session` | `action` request/status/close, `alias`, request `log_dir` (absolute local workspace path), optional `log_keep` (default 50), or request status with `request_id` |
 
 Codex registration (`~/.codex/config.toml`); the helper prints the auth header
 from `.env` on every connection, so the token never sits in config. It runs
